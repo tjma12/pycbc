@@ -1,0 +1,230 @@
+#!/usr/bin/env python
+
+__prog__ = 'collapps_inj'
+__author__ = 'Collin Capano <collin.capano@ligo.org>'
+__description__ = 'Creates an injection distribution given the input parameters.'
+
+import numpy
+import os, sys
+import random
+import time
+import sqlite3
+from optparse import OptionParser
+
+import lal
+import lalsimulation as lalsim
+
+from glue.ligolw.utils import ligolw_sqlite
+from glue.ligolw import ligolw
+from glue.ligolw import utils
+from glue.ligolw import lsctables
+from glue.ligolw import table
+from glue.ligolw import dbtables
+from glue.ligolw.utils import process
+
+from pycbc.overlaps import create_injections, waveform_utils
+
+parser = OptionParser(description = __description__)
+parser.add_option("-o", "--output-dir", default = '.', help = "Directory to write output file to.")
+parser.add_option("-u", "--user-tag", help = "User tag for output files.")
+#parser.add_option("-t", "--tmp-space", action = "store", type = "string", default = None, metavar = "PATH", help = "Location of local disk on which to do work. This is used to enhance performance in a networked environment.")
+parser.add_option('-p', '--mass-parameters', metavar = 'param1,param2', default = 'mass1,mass2', help = 'What mass parameters to distribute injections in. Currently, can only do mass1,mass2.')
+parser.add_option('-d', '--mass-distribution', help = 'What distribution to use for mass parameters. Options are uniform or log10.') 
+parser.add_option("-m", "--min-component-mass", type = 'float', help = "Minimum component mass to consider.")
+parser.add_option("-M", "--max-component-mass", type = 'float', default = numpy.inf, help = "Maximum component mass to consider.")
+parser.add_option("", "--min-mtotal", type = 'float', default = -numpy.inf, help = "Put a lower bound on the total mass.")
+parser.add_option("", "--max-mtotal", type = 'float', default = numpy.inf, help = "Put an upper bound on the total mass.")
+parser.add_option("-q", "--min-mass-ratio", type = "float", default = 1, help = "The minimum mass ratio to consider. Default is 1.")
+parser.add_option("-Q", "--max-mass-ratio", default = numpy.inf, type = "float", help = "The maximum mass ratio to consider.")
+parser.add_option("-S", "--spin1z-range", metavar = "LowerBound,UpperBound", default = None, help = "The range to distribute the z-component of the spins of the more massive object (mass1). Points will be randomly distributed with a uniform pdf. Values must be in range [-1,1]. If not set, all spins will be set to 0.")
+parser.add_option("-s", "--spin2z-range", metavar = "LowerBound,UpperBound", default = None, help = "The range to distribute the z-component of the spins of the less massive object (mass2). Points will be randomly distributed with a uniform pdf. Values must be in range [-1,1]. If not set, all spins will be set to 0.")
+parser.add_option("-l", "--rand-location", action = "store_true", default = False, help = "Randomize the location.")
+parser.add_option("", "--start-time", type = "int", default = 900000000, help = "Start time, in gps seconds, to use for the injection window. Default is 900000000.")
+parser.add_option("", "--time-window", type = "float", default = lal.LAL_DAYSID_SI, help = "Maximum number of seconds from the start-time to generate an injection. Default is one sidreal day (%f)" % lal.LAL_DAYSID_SI)
+parser.add_option("", "--rand-time", action = "store_true", default = False, help = "Randomize the time. The injections geocent_end_times will be randomly distributed between start-time and start-time+time-window.")
+parser.add_option("", "--rand-inclination", action = "store_true", default = False, help = "Randomize the inclination angle. Inclination angles will be chosen uniformly from arccos([-1, 1]).")
+parser.add_option("", "--rand-init-phase", action = "store_true", default = False, help = "Randomize the initial phase angle. Phase angles will be chosen uniformly from [0, 2pi]. If not turned on, initial phase will be set to 0.")
+parser.add_option("", "--rand-polarization", action = "store_true", default = False, help = "Randomize the polarization angle. Polarization angles will be chosen uniformly from [0, 2pi]. If not turned on, the polarization will be set to 0.")
+parser.add_option("-a", "--approximant", help = "Approximant to use to generate the waveforms.")
+parser.add_option("-T", "--taper", help = "Set whether or not to taper the waveforms at the start and/or end. Options are: start, end, start_end. If not specified, no tapering will be done.")
+parser.add_option('', '--seed', type = 'int', default = int((time.time()*100)% 1e6), help = 'Set the seed to use for the random number generator. If none specified, will use the current time.')
+parser.add_option("-n", "--n-points", type = "int", help = "Number of injections to create")
+parser.add_option('-v', '--verbose', action = 'store_true', help = 'Be verbose.')
+
+opts, _ = parser.parse_args()
+
+# check opts
+if opts.n_points is None:
+    raise ValueError, "must specify n-points"
+param_dist = set(map(str.strip, opts.mass_parameters.split(',')))
+if param_dist == set(['m1', 'm2']):
+    param1 = 'm1'
+    param2 = 'm2'
+elif param_dist == set(['mtotal', 'q']):
+    param1 = 'mtotal'
+    param2 = 'q'
+else:
+    raise ValueError, "unrecognized mass-parameters; options are 'm1,m2' " +\
+        "or 'mtotal,q'"
+min_mass = opts.min_component_mass
+max_mass = opts.max_component_mass
+min_mtotal = opts.min_mtotal
+max_mtotal = opts.max_mtotal
+min_q = opts.min_mass_ratio
+max_q = opts.max_mass_ratio
+if min_q < 1:
+    raise ValueError, "minimum mass ratio must be >= 1"
+if min_mass is None:
+    raise ValueError, "must specify a minimum component mass"
+if all(x == numpy.inf for x in [max_mass, max_mtotal, max_q]):
+    raise ValueError, "must specify at least a max-mtotal, max-mass-ratio, or max-component-mass"
+if max_mass == numpy.inf:
+    max_mass = min(max_mtotal - min_mass, max_q * min_mass)
+if opts.spin1z_range is not None:
+    min_spin1z, max_spin1z = map(float, opts.spin1z_range.split(','))
+    if min_spin1z < -1 or max_spin1z > 1:
+        raise ValueError, "spin1z must be in range [-1,1]"
+if opts.spin2z_range is not None:
+    min_spin2z, max_spin2z = map(float, opts.spin2z_range.split(','))
+    if min_spin2z < -1 or max_spin2z > 1:
+        raise ValueError, "spin2z must be in range [-1,1]"
+
+taper = waveform_utils.get_taper_string(opts.taper)
+
+random.seed(opts.seed)
+
+# create the document to save to 
+if opts.verbose:
+    print >> sys.stdout, "Creating xmldoc..."
+xmldoc = ligolw.Document()
+xmldoc.appendChild(ligolw.LIGO_LW())
+# add this program's metadata
+proc_id = process.register_to_xmldoc(xmldoc, __prog__, opts.__dict__)
+# add the simulation table
+simtable = lsctables.New(lsctables.SimInspiralTable)
+# connect the table to the document
+xmldoc.childNodes[0].appendChild(simtable)
+# add other needed tables
+other_tables = [
+    lsctables.New(lsctables.CoincDefTable),
+    lsctables.New(lsctables.CoincTable),
+    lsctables.New(lsctables.CoincMapTable)]
+for tab in other_tables:
+    xmldoc.childNodes[0].appendChild(tab)
+
+# cycle over the number of points, generating an injection for each
+if opts.verbose:
+    print >> sys.stdout, "Creating injection parameters..."
+for n in range(opts.n_points):
+    if opts.verbose:
+        print >> sys.stdout, "%i / %i\r" % (n+1, opts.n_points),
+        sys.stdout.flush()
+    # create a SimInspiral instance to store parameters
+    thisInj = lsctables.SimInspiral()
+    # initialize all elements to None
+    [setattr(thisInj, col, None) for col in thisInj.__slots__]
+    thisInj.simulation_id = simtable.get_next_id()
+    thisInj.process_id = proc_id.process_id
+    outOfBounds = True
+    while outOfBounds:
+        if param1 == 'm1' and param2 == 'm2':
+            # draw a mass1, mass2
+            mass2, mass1 = sorted([random.uniform(min_mass, max_mass), random.uniform(min_mass, max_mass)])
+            q = mass1 / mass2
+            mtotal = mass1 + mass2
+            # check
+            outOfBounds = q < min_q or q > max_q or mtotal < min_mtotal or mtotal > max_mtotal
+        if param1 == 'mtotal' and param2 == 'q':
+            mtotal = random.uniform(min_mtotal, max_mtotal)
+            q = random.uniform(min_q, max_q)
+            mass2 = mtotal / (1+q)
+            mass1 = mtotal - mass2
+            outOfBounds = mass1 < min_mass or mass1 > max_mass or mass2 < min_mass or mass2 > max_mass
+    thisInj.mass1 = mass1
+    thisInj.mass2 = mass2
+    # calculate chirp mass and eta
+    thisInj.mchirp = create_injections.getMchirp(mass1, mass2)
+    thisInj.eta = create_injections.getEta(mass1, mass2)
+
+    # set spin
+    if opts.spin1z_range is not None:
+        thisInj.spin1z = random.uniform(min_spin1z, max_spin1z)
+    else:
+        thisInj.spin1z = 0.
+    if opts.spin2z_range is not None:
+        thisInj.spin2z = random.uniform(min_spin2z, max_spin2z)
+    else:
+        thisInj.spin2z = 0.
+    # FIXME: add ability for precession
+    thisInj.spin1x = thisInj.spin1y = thisInj.spin2x = thisInj.spin2y = 0.
+
+    # get latitude, longitude
+    if opts.rand_location:
+        # these are taken from inspinj; I'm not sure why arcsin is used
+        # whereas two pi is used for longitude
+        thisInj.latitude = numpy.arcsin(random.uniform(-1.,1.))
+        thisInj.longitude = random.uniform(0, 2*numpy.pi)
+    else:
+        thisInj.latitude = thisInj.longitude = 0.
+
+    # get time
+    event_time = lal.LIGOTimeGPS(opts.start_time)
+    if opts.rand_time:
+        event_time += random.uniform(0, opts.time_window)
+    thisInj.geocent_end_time = event_time.gpsSeconds
+    thisInj.geocent_end_time_ns = event_time.gpsNanoSeconds
+
+    # get inclination, phase, polarization
+    if opts.rand_inclination:
+        thisInj.inclination = numpy.arccos(random.uniform(-1,1))
+    else:
+        thisInj.inclination = 0.
+    if opts.rand_init_phase:
+        thisInj.phi0 = random.uniform(0, 2*numpy.pi)
+    else:
+        thisInj.phi0 = 0.
+    if opts.rand_polarization:
+        thisInj.polarization = random.uniform(0, 2*numpy.pi)
+    else:
+        thisInj.polarization = 0.
+
+    # FIXME: we'll just set distance to 1, to be adjusted
+    # set waveform properties
+    thisInj.waveform = opts.approximant
+    thisInj.taper = taper 
+    thisInj.amp_order = 0
+
+    # get ffinal
+    # FIXME: Putting in try/except because not all approximants are supported
+    # yet. Once they are, remove.
+    try:
+        ffinal = lalsim.SimInspiralGetFinalFreq(mass1*lal.LAL_MSUN_SI,
+            mass2*lal.LAL_MSUN_SI, thisInj.spin1x, thisInj.spin1y, thisInj.spin1z,
+            thisInj.spin2x, thisInj.spin2y, thisInj.spin2z,
+            getattr(lalsim, opts.approximant))
+    except:
+        ffinal = None
+    thisInj.f_final = ffinal
+
+    simtable.append(thisInj)
+
+# finished creating injections, write results
+outfile = create_injections.get_outfilename(opts.output_dir, ifos_tag = 'HL', user_tag = opts.user_tag, gz = True)
+if opts.verbose:
+    print >> sys.stdout, ""
+    print >> sys.stdout, "Saving to %s..." % outfile
+
+utils.write_filename(xmldoc, outfile, gz = outfile.endswith('.gz'), xsl_file = "ligolw.xsl")
+
+# FIXME: Can I get it to write to a database?
+#outfile = outfile.replace('.xml', '.sqlite')
+#working_filename = dbtables.get_connection_filename(outfile, opts.tmp_space, replace_file = True, verbose = opts.verbose)
+#connection = sqlite3.connect(working_filename)
+#ligolw_sqlite.insert_from_xmldoc(connection, xmldoc, verbose = opts.verbose)
+#connection.commit()
+#connection.close()
+#dbtables.put_connection_filename(outfile, working_filename, verbose = opts.verbose)
+
+if opts.verbose:
+    print >> sys.stdout, "Finished!"
+sys.exit(0)
