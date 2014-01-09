@@ -1,0 +1,155 @@
+#! /usr/bin/env python
+
+__prog__ = 'collapps_randRbySNR'
+__author__ = 'Collin Capano <collin.capano@ligo.org>'
+__description__ = 'Resets the distance distribution in a sim_inspiral table based on desired SNR. The SNRs are chosen randomly from a given range.'
+
+import sqlite3
+import numpy
+import os, sys
+import random
+import time
+from optparse import OptionParser
+
+import lal
+import lalsimulation as lalsim
+
+from glue.ligolw import lsctables
+from glue.ligolw import utils
+from glue.ligolw import table
+from glue.ligolw import dbtables
+from glue.ligolw.utils import process
+
+from pylal import ligolw_sqlutils as sqlutils
+
+from pycbc import filter
+from pycbc.overlaps import waveform_utils
+from pycbc.overlaps import overlap_utils
+
+parser = OptionParser(description = __description__)
+parser.add_option("-t", "--tmp-space", action = "store", type = "string", default = None, metavar = "PATH", help = "Location of local disk on which to do work. This is used to enhance performance in a networked environment.")
+parser.add_option("-p", "--psd-model", help = "What PSD to use for overlaps. Options are %s." %(', '.join(overlap_utils.get_psd_models())))
+parser.add_option("-A", "--asd-file", help = "Load the PSD from a dat file containing an ASD. If both this and psd-model specified, this will take precedence.")
+parser.add_option('-f', '--waveform-f-min', type = 'float', help = "Frequency at which to start the waveform generation (in Hz).")
+parser.add_option('-F', '--overlap-f-min', type = 'float', help = "Frequency at which to start the overlap (in Hz). Note: This must be larger than waveform-f-min.")
+parser.add_option('-r', '--default-sample-rate', type = 'int', default = 4096, help = "Default sample rate to use (in Hz). Must be a power of 2. Only needed if injections' f_final column is not populated. If they are populated, the smallest sample rate giving a Nyquist frequency greater than the f_final of each injection will be used. Default is 4096.")
+parser.add_option('-U', '--user-tag', help = "User tag to add to all Overlap files.")
+parser.add_option('-s', '--min-snr', type = 'float', help = 'Set the minimum SNR to use.')
+parser.add_option('-S', '--max-snr', type = 'float', help = 'Set the maximum SNR to use; must be larger than min-snr. To use an exact snr, set to the same value as min-snr.')
+parser.add_option('-d', '--distribution', default = 'linear', help = 'What distribution to use for the snrs. Options are either linear, or log10. Default is linear.')
+parser.add_option('', '--seed', type = 'int', default = int((time.time()*100)% 1e6), help = 'Set the seed to use for the random number generator. If none specified, will use the current time.')
+parser.add_option('-v', '--verbose', action = 'store_true', help = 'Be verbose.')
+
+opts, filenames = parser.parse_args()
+
+# check options
+wFmin = opts.waveform_f_min
+oFmin = opts.overlap_f_min
+if oFmin < wFmin:
+    raise ValueError, "--waveform-f-min must be less than overlap-f-min"
+default_sample_rate = opts.default_sample_rate
+if numpy.log2(default_sample_rate) % 1 != 0.:
+    raise ValueError, "--default-sample-rate must be a power of 2"
+if opts.asd_file is None and opts.psd_model is None:
+    raise ValueError, "must specify --asd-file or --psd-model"
+if opts.asd_file is not None and not os.path.exists(opts.asd_file):
+    raise ValueError, "asd-file %s not found" % opts.asd_file
+
+random.seed(opts.seed)
+
+# initialize the workspace
+workSpace = overlap_utils.WorkSpace()
+
+# get the psd model to use
+if opts.asd_file is None:
+    psd_model = opts.psd_model
+    min_length = 0
+# if using an asd file, the df must be greater than what's in the file
+else:
+    min_length = 1. / overlap_utils.get_asd_file_df(opts.asd_file)
+    
+
+for fnum, infile in enumerate(filenames):
+    if opts.verbose:
+        print >> sys.stdout, "Analyzing file %s" % infile
+    # connect to input
+    working_filename = dbtables.get_connection_filename(infile, opts.tmp_space, verbose = opts.verbose)
+    connection = sqlite3.connect(working_filename)
+    if opts.tmp_space:
+        dbtables.set_temp_store_directory(connection, opts.tmp_space, verbose = opts.verbose)
+    xmldoc = dbtables.get_xml(connection)
+    this_process = process.register_to_xmldoc(xmldoc, __prog__, opts.__dict__)
+
+    # cycle over the injections, calculating results for each
+    if opts.verbose:
+        print >> sys.stdout, "Cycling over injections..."
+    sim_inspiral_cols = sqlutils.get_column_names_from_table(connection, 'sim_inspiral')
+    sqlquery = 'SELECT %s FROM sim_inspiral' % ','.join(sim_inspiral_cols)
+    for ii, injVals in enumerate(connection.cursor().execute(sqlquery)):
+        if opts.verbose:
+            print >> sys.stdout, "Injection %i\r" %(ii+1), 
+            sys.stdout.flush()
+
+        # store the values as a sim_inspiral instance
+        injParams = lsctables.SimInspiral()
+        [setattr(injParams, col, val) for col,val in zip(sim_inspiral_cols, injVals)]
+        # force the distance to be 1 Mpc
+        injParams.distance = 1.
+
+        # create an Injection instance
+        inj = waveform_utils.Injection(injParams)
+
+        # check if f_final exists; if so calculate the sample rate to use from that
+        if injParams.f_final is not None:
+            sample_rate = int(2**(numpy.ceil(numpy.log2(injParams.f_final))+1))
+        else:
+            sample_rate = opts.default_sample_rate
+
+        h = inj.get_waveform(sample_rate, wFmin, apply_ifo_response=False,
+            ifo=None, optimally_oriented=True, store=False)
+
+        # store the duration
+        inj.duration = h.duration
+        
+        # make the segment length a power of two
+        N = int(2**numpy.ceil(numpy.log2(max(len(h), min_length*sample_rate))))
+        seg_length = N/float(sample_rate)
+        df = 1./seg_length
+
+        # resize h
+        h.resize(N)
+        
+        # get the psd and needed workspace vectors
+        if opts.asd_file is not None:
+            psd = workSpace.get_psd_from_file(df, wFmin, sample_rate, opts.asd_file)
+        else:
+            psd = workSpace.get_psd(df, wFmin, sample_rate, psd_model)
+
+        # calculate sigma
+        sigma = filter.sigma(h, psd, oFmin)
+
+        # get the distance limits corresponding to the desired SNR range
+        min_dist = sigma / opts.max_snr
+        max_dist = sigma / opts.min_snr
+        if opts.distribution == "log10":
+            distance = 10**random.uniform(numpy.log10(min_dist), numpy.log10(max_dist))
+        else:
+            distance = random.uniform(min_dist, max_dist)
+        
+        # save to the database; in an abuse of columns, we'll store
+        # sigma to eff_dist_t and the injection duration to alpha;
+        sqlquery = 'UPDATE sim_inspiral SET distance = %f, eff_dist_t = %f, alpha = %f WHERE simulation_id == "%s"' %(distance, sigma, inj.duration, inj.params.simulation_id)
+        connection.cursor().execute(sqlquery)
+        connection.commit()
+
+    if opts.verbose:
+        print >> sys.stdout, ""
+        sys.stdout.flush()
+
+    # save the database
+    connection.close()
+    dbtables.put_connection_filename(infile, working_filename, verbose = opts.verbose)
+
+if opts.verbose:
+    print >> sys.stdout, "Finished!"
+sys.exit(0)

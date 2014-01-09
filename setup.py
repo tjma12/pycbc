@@ -314,6 +314,7 @@ setup (
                'bin/hdfcoinc/pycbc_make_hdf_coinc_workflow',
                'bin/pycbc_basic_pegasus_plan',
                'bin/pycbc_inj',
+               'bin/pycbc_randr_by_snr',
                'bin/hdfcoinc/pycbc_coinc_mergetrigs',
                'bin/hdfcoinc/pycbc_coinc_findtrigs',
                'bin/hdfcoinc/pycbc_coinc_bank2hdf',
