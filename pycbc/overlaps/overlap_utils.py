@@ -267,7 +267,8 @@ class ParamWindowList(segments.segmentlist):
 class OverlapResult:
     params = ['fitting_factor', 'snr', 'chisq', 'new_snr', 'chisq_dof',
         'event_time', 'event_time_ns', 'snr_std', 'chisq_std', 'new_snr_std',
-        'num_tries', 'num_successes', 'sample_rate', 'segment_length', 'tmplt_approximant', 'overlap_f_min', 'waveform_f_min']
+        'num_tries', 'num_successes', 'sample_rate', 'segment_length',
+        'tmplt_approximant', 'overlap_f_min', 'waveform_f_min']
     __slots__ = params + ['event_id', 'simulation_id']
     
     def __init__(self, event_id, simulation_id):
@@ -372,7 +373,10 @@ def create_results_table(connection):
         """])
     connection.cursor().executescript(sqlquery)
 
-
+############################
+#
+#   FIXME: The following should be moved to ligolw_sqlutils
+#
 def create_cem_table(connection):
     sqlquery = ''.join(["""
         CREATE TABLE IF NOT EXISTS coinc_event_map (""",
@@ -408,6 +412,11 @@ def create_coinc_event_table(connection):
         cursor.execute(sqlquery)
     connection.commit()
 
+sqlutils.create_cem_table = create_cem_table
+sqlutils.add_coinc_event_map_entry = add_coinc_event_map_entry
+sqlutils.create_coinc_definer_table = create_coinc_definer_table
+sqlutils.create_coinc_event_table = create_coinc_event_table
+############################
 
 def create_log_table(connection):
     sqlquery = "CREATE TABLE IF NOT EXISTS joblog (time, simulation_id, inj_num, event_id, tmplt_num, pickle_file, backup_archive, scratch_archive, host, username)"

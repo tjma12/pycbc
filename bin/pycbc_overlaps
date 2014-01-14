@@ -1,0 +1,586 @@
+#!/usr/bin/env python
+
+__prog__ = 'ccapps_overlaps'
+__author__ = 'Collin Capano <collin.capano@ligo.org>'
+__description__ = 'Calculates effectualness for a set of signals given a template bank. Values are stored for the best match.'
+
+import sqlite3
+import numpy
+import os, sys, shutil, getpass
+import time
+import random
+import operator
+from optparse import OptionParser
+
+import lal
+import lalsimulation as lalsim
+
+from glue.ligolw import utils
+from glue.ligolw import table
+from glue.ligolw import lsctables
+from glue.ligolw import dbtables
+from glue.ligolw.utils import process
+
+from pylal import ligolw_sqlutils as sqlutils
+
+from pycbc import filter
+
+from pycbc.overlaps import waveform_utils
+from pycbc.overlaps import overlap_utils
+
+parser = OptionParser(description = __description__)
+parser.add_option('-o', '--output-dir', default = '.', help = 'Directory to save overlap output data.')
+parser.add_option("-t", "--tmp-space", action = "store", type = "string", default = None, metavar = "PATH", help = "Location of local disk on which to do work. This is used to enhance performance in a networked environment.")
+parser.add_option("-p", "--psd-model", help = "What PSD model to use for overlaps. Options are %s." %(', '.join(overlap_utils.get_psd_models())))
+parser.add_option("-A", "--asd-file", help = "Load the PSD from a dat file containing an ASD. If both this and psd-model specified, this will take precedence.")
+parser.add_option('-f', '--waveform-f-min', type = 'float', help = "Frequency at which to start the waveform generation (in Hz).")
+parser.add_option('-F', '--overlap-f-min', type = 'float', help = "Frequency at which to start the overlap (in Hz). Note: This must be larger than waveform-f-min.")
+parser.add_option('-r', '--min-sample-rate', type = 'int', help = "Minimum sample rate to use (in Hz). Must be a power of 2.")
+parser.add_option('-i', '--ifo', help = "What ifo to inject into.")
+parser.add_option('--no-response-func', action = 'store_true', default = False, help = "Do not apply the detector response function to the injections. This will effectively put all injections overhead the detector. The injections' inclination angles will still be applied, however.")
+parser.add_option('-U', '--user-tag', help = "User tag to add to all Overlap files.")
+parser.add_option('-M', '--use-injection-cache', metavar = '"memory" or "disk"', help = "Speed up calculations by using an injection cache. Options are 'memory' or 'disk'. If 'memory', all injections will be stored in memory. If 'disk', injections will be stored to a temporary h5py archive. If a temp-space is specified, this temporary archive will be placed there; otherwise, it will be created in the current working directory.")
+parser.add_option('-a', '--approximant', help = "Approximant to use for the templates.")
+parser.add_option('', '--match-window-db', help = 'Use the match windows specified in the given database to reduce the number of overlaps computed.')
+parser.add_option('', '--save-all-overlaps', action = 'store_true', default = False, help = 'Do not delete the all_overlaps table from the output database before exiting. This table contains the fitting factors for all the injections and templates that were filtered.')
+parser.add_option('-R', '--replace', action = 'store_true', default = False, help = 'If the output database already exists, overwrite it. Default action is not to overwrite, in which case only injections that do not have overlap values calculated in the database will be analyzed.')
+parser.add_option('-T', '--checkpoint-dt', type = 'float', default = numpy.inf, help = 'Number of minutes between checkpoints. Default is infinity, meaning no checkpointing.')
+parser.add_option('-v', '--verbose', action = 'store_true', help = 'Be verbose.')
+
+opts, filenames = parser.parse_args()
+
+# check options
+if opts.ifo is None:
+    raise ValueError("--ifo required")
+ifo = opts.ifo.upper()
+if len(ifo) != 2:
+    raise ValueError("--ifo must be of format [site][number], e.g., 'H1'")
+if ifo.startswith('T'):
+    raise ValueError("Because eff_dist_t is used to store target snrs, " +\
+        "--ifo cannot start with T")
+wfmin = opts.waveform_f_min
+ofmin = opts.overlap_f_min
+if ofmin < wfmin:
+    raise ValueError("--waveform-f-min must be less than overlap-f-min")
+min_sample_rate = opts.min_sample_rate
+if min_sample_rate is None or numpy.log2(min_sample_rate) % 1 != 0.:
+    raise ValueError("--min-sample-rate must be a power of 2")
+if opts.asd_file is None and opts.psd_model is None:
+    raise ValueError("must specify --asd-file or --psd-model")
+if opts.asd_file is not None and not os.path.exists(opts.asd_file):
+    raise ValueError("asd-file %s not found" % opts.asd_file)
+if (opts.use_injection_cache is not None and not 
+        (opts.use_injection_cache == 'disk' or
+        opts.use_injection_cache == 'memory')):
+    raise ValueError('if using injection cache, --use-injection-cache must ' +\
+        'be set to "disk" or "memory"')
+
+# load the param window list
+param_windows = {}
+if opts.match_window_db is not None:
+    connection = sqlite3.connect(opts.match_window_db)
+    sqlquery = 'SELECT DISTINCT inj_apprx FROM match_windows WHERE tmplt_apprx == ?'
+    apprxs = [apprx[0] for apprx in connection.cursor().execute(sqlquery, (opts.approximant,))]
+    for apprx in apprxs:
+        pwList = overlap_utils.ParamWindowList()
+        pwList.load_from_database(connection, 'mchirp', apprx, tmplt_apprx = opts.approximant)
+        param_windows[apprx] = pwList
+
+# initialize the workspace
+workSpace = overlap_utils.WorkSpace()
+
+# set the start time
+last_time = time.time()
+last_timestamp = 0
+last_keylen = 0
+last_subkeylen = 0
+
+# set a temp path for backup files
+tmp_path = opts.tmp_space is not None and opts.tmp_space or '.'
+
+# get the psd model to use
+if opts.asd_file is None:
+    psd_model = opts.psd_model
+    min_length = 0
+# if using an asd file, the df must be greater than what's in the file
+else:
+    min_length = 1. / overlap_utils.get_asd_file_df(opts.asd_file)
+
+for fnum, infile in enumerate(filenames):
+
+    if opts.verbose:
+        print >> sys.stdout, "Analyzing file %s" % infile
+    if not os.path.exists(infile):
+        raise ValueError, "the input file %s could not be found" % infile
+    # get output name
+    outfile = overlap_utils.get_outfilename(opts.output_dir, opts.ifo,
+        opts.user_tag, fnum)
+    if outfile == infile:
+        raise ValueError("output file (%s) is the same as the input file " +\
+            "(%s)" %(outfile, infile))
+
+    if opts.tmp_space:
+        if os.path.exists(outfile) and not opts.replace:
+            working_filename = dbtables.get_connection_filename(outfile,
+                tmp_path=opts.tmp_space, verbose=opts.verbose)
+        else:
+            working_filename = dbtables.get_connection_filename(infile,
+                tmp_path=opts.tmp_space, verbose=opts.verbose)
+        connection = sqlite3.connect(working_filename)
+        dbtables.set_temp_store_directory(connection, opts.tmp_space,
+            verbose=opts.verbose)
+    else:
+        if not os.path.exists(outfile) or opts.replace:
+            connection = overlap_utils.get_outfile_connection(infile, outfile,
+                replace=opts.replace, verbose=opts.verbose)
+        else:
+            connection = sqlite3.connect(outfile)
+        working_filename = None
+    # FIXME: dbtables apparently has a problem with overlap_results table
+    try:
+        xmldoc = dbtables.get_xml(connection)
+        this_process = process.register_to_xmldoc(xmldoc, __prog__,
+            opts.__dict__).process_id
+    except:
+        print >> sys.stderr, "Warning: not writing process info to database"
+        this_process = sqlutils.get_next_id(connection, 'process',
+            'process_id')
+
+    # create the results table in the output if it doesn't exist
+    overlap_utils.create_results_table(connection)
+    overlap_utils.create_cem_table(connection)
+    overlap_utils.create_coinc_definer_table(connection)
+    overlap_utils.create_coinc_event_table(connection)
+    # create a table to store all of the overlaps;
+    # we will delete this when done
+    overlap_utils.create_all_results_table(connection)
+    
+    # create the log table for checkpointing
+    overlap_utils.create_log_table(connection)
+    # get startup parameters
+    startup_dict = overlap_utils.get_startup_data(connection)
+    if startup_dict != {}:
+        if opts.verbose:
+            print >> sys.stdout, "Loaded startup data..."
+
+        # get the backup archive if we're caching to disk
+        backup_arxv_fn = startup_dict['backup_archive']
+        if backup_arxv_fn is None:
+            archive = {}
+        elif opts.use_injection_cache == 'disk':
+            # load the archive
+            if backup_arxv_fn.endswith('.hdf5'):
+                archive = waveform_utils.get_scratch_archive(tmp_path,
+                    start_archive=backup_arxv_fn)
+            else:
+                # if the last of the program used a backup archive in memory,
+                # we cannot use it; so we just start from scratch
+                print >> sys.stderr, "Warning: Backup archive appears to " +\
+                    "have been from a dictionary. Will recreate the archive " +\
+                    "from scratch as hdf5 file."
+                archive = waveform_utils.get_scratch_archive(tmp_path,
+                    start_archive=None)
+            # ensure that the old scratch archive was deleted
+            # FIXME: just hardcoding the local drive path for now
+            #if startup_dict['scratch_archive'] is not None:
+            #    local_drive_path = '/cluster/usr1'
+            #    overlap_utils.del_old_scratch_files(local_drive_path,
+            #       startup_dict['username'], startup_dict['host'],
+            #       [os.path.basename(startup_dict['scratch_archive'])],
+            #       opts.verbose)
+        elif (opts.use_injection_cache == 'memory' and
+                backup_arxv_fn.endswith('.pickle')):
+            archive = overlap_utils.load_backup_archive_dict(backup_arxv_fn)
+        else:
+            archive = {}
+
+        # get the starting index
+        start_idx = startup_dict['tmplt_num'] + 1
+        start_inj_idx = startup_dict['inj_num'] + 1
+
+    else:
+        start_idx = 0
+        start_inj_idx = 0
+        if opts.use_injection_cache == 'disk':
+            archive = waveform_utils.get_scratch_archive(tmp_path,
+                start_archive=None)
+        else:
+            archive = {}
+
+    # get injections that were already analyzed
+    sqlquery = """
+        SELECT
+            map.event_id, results.sample_rate, results.segment_length,
+            results.num_tries
+        FROM
+            overlap_results as results
+        JOIN
+            coinc_event_map AS map
+        ON
+            map.coinc_event_id == results.coinc_event_id
+        WHERE
+            map.table_name == "sim_inspiral"
+        """
+    already_analyzed = dict([ [sim_id, (sr, sl, nt)] for (sim_id, sr, sl, nt)
+        in connection.cursor().execute(sqlquery)])
+
+    # get the templates:
+    # the templates' miniumum sample_rates are set to
+    # max(min_sample_rate, tmplt.f_final)
+    templates = waveform_utils.TemplateDict()
+    templates.get_templates(connection, opts.approximant, wfmin,
+        min_sample_rate, calc_f_final=True, estimate_dur=True,
+        verbose=opts.verbose, only_matching=False)
+    if opts.verbose:
+        print >> sys.stdout, "Database contains %i templates" %(
+            len(templates.keys()))
+
+    # order the templates by sample rate, duration
+    templates.set_sort_key(['f_final', 'template_duration']) 
+
+    # check that the event_id matches
+    if startup_dict and startup_dict['event_id'] is not None:
+        check_eid = templates.as_list[start_idx-1].event_id
+        if startup_dict['event_id'] != check_eid:
+            raise ValueError("starting event_id-1 (%s) " %(check_eid) +\
+                "does not match last event_id in log table (%s)" %(
+                startup_dict['event_id']))
+        elif opts.verbose:
+            print >> sys.stdout, "Starting with template %i..." % (start_idx)
+
+    # get the injections
+    if opts.verbose:
+        print >> sys.stdout, "Getting injections..."
+    sim_inspiral_cols = sqlutils.get_column_names_from_table(connection, 'sim_inspiral')
+    sqlquery = 'SELECT %s FROM sim_inspiral' % ', '.join(sim_inspiral_cols)
+    injections = []
+    for ii, vals in enumerate(connection.cursor().execute(sqlquery)):
+        if opts.verbose:
+            print >> sys.stdout, "%i\r" %(ii+1),
+            sys.stdout.flush()
+        inj_params = lsctables.SimInspiral()
+        [setattr(inj_params, col, val) for col,val in zip(sim_inspiral_cols, vals)]
+        # create an Injection instance
+        # we get the minimum sample rate and duration from the f_final and alpha
+        # columns, respectively; if these are not stored in the database, we try to
+        # estimate them.
+        inj = waveform_utils.Injection(inj_params)
+        if not inj.params.f_final:
+            try:
+                inj.params.f_final = lalsim.SimInspiralGetFinalFreq(
+                    inj.params.mass1*lal.LAL_MSUN_SI,
+                    inj.params.mass2*lal.LAL_MSUN_SI, inj.params.spin1x,
+                    inj.params.spin1y, inj.params.spin1z, inj.params.spin2x,
+                    inj.params.spin2y, inj.params.spin2z,
+                    getattr(lalsim, inj.params.waveform))
+            except:
+                # if we have a failure, use EOBNRv2 as an estimate. Since it includes
+                # ringdown, it will generally over-estimate the upper frequency
+                print >> sys.stderr, \
+                    "WARNING: Could not estimate f_final of injection %s. " %(
+                     inj.params.simulation_id) + "Using EOBNRv2 as estimate."
+                inj.params.f_final = lalsim.SimInspiralGetFinalFreq(
+                    inj.params.mass1*lal.LAL_MSUN_SI,
+                    inj.params.mass2*lal.LAL_MSUN_SI, 0, 0, 0, 0, 0, 0,
+                    lalsim.EOBNRv2)
+        # FIXME: Getting the duration from the alpha column
+        if inj.params.alpha is None:
+            inj.duration = waveform_utils.estimate_duration(inj.params.mass1,
+                inj.params.mass2, numpy.array([inj.params.spin1x,
+                inj.params.spin1y, inj.params.spin1z]), numpy.array([
+                inj.params.spin2x, inj.params.spin2y, inj.params.spin2z]),
+                wfmin, waveform_utils.schwarzschild_fisco(inj.params.mass1,
+                inj.params.mass2), order=4)
+        else:
+            inj.duration = inj.params.alpha
+
+        # add an entry in the results
+        injections.append(inj)
+
+    # as with the templates, we will sort the injections on f_final and duration
+    injections.sort(key = operator.attrgetter('params.f_final', 'duration'))
+
+    # check that the simulation_id matches
+    if startup_dict and startup_dict['simulation_id'] is not None:
+        check_id = str(injections[start_inj_idx - 1].params.simulation_id)
+        if startup_dict['simulation_id'] != check_id:
+            raise ValueError("starting simulation_id (%s) " %(check_id) +\
+                "does not match last simulation_id in log table (%s)" %(
+                startup_dict['simulation_id']))
+        elif opts.verbose:
+            print >> sys.stdout, "Starting with injection %i..." % (start_inj_idx)
+
+
+    #
+    #   Find the best match via fitting factor
+    #
+    if opts.verbose:
+        verb_string = "Template %i: Injection %i\r"
+   
+    # we will keep track of the the previous sample rates and durations
+    # used as we cycle over the injections and templates to minimize
+    # the number of times we generate the waveforms
+    last_tmplt_rate = 0
+    # inj rate is a dictionary keyed by simulation_ids so as not to
+    # regenerate the injection every time we regenerate the template
+    last_inj_rate = {}
+    # ditto for durations
+    last_tmplt_N = 0
+    last_inj_N = {}
+
+    # cycle over the templates
+    for jj in range(start_idx, len(templates.as_list)):
+
+        tmplt = templates.as_list[jj]
+        h = htilde = None
+
+        # cycle over the injections 
+        for ii, inj in enumerate(injections):
+            # skip if already done at start
+            if jj == start_idx and ii < start_inj_idx:
+                continue
+
+            if opts.verbose:
+                print >> sys.stdout, verb_string %(jj+1, ii+1),
+                sys.stdout.flush()
+
+            # check if the template falls within this injection's param window
+            try:
+                pwList = param_windows[inj.params.waveform]
+                pwin = pwList[pwList.find(inj.params.mchirp)]
+                if tmplt.mchirp not in pwin.recovery_window(inj.params.mchirp):
+                    continue
+            except KeyError:
+                pass
+
+            # get the sample rate to use
+            sample_rate = int(2**(numpy.ceil(numpy.log2(
+                max(tmplt.f_final, inj.params.f_final))+1)))
+            sample_rate = max(sample_rate, min_sample_rate)
+            # get the segment length to use
+            # we'll set the segment length to be twice the max duration
+            # of this template and the injection
+            seg_length = int(2**(numpy.ceil(numpy.log2(
+                max(tmplt.template_duration, inj.duration, min_length)))+1))
+            N = seg_length * sample_rate
+            df = 1./seg_length
+
+            # if the sample rate isn't the same as the last, have to
+            # regenerate the template
+            if sample_rate != last_tmplt_rate or not h:
+                h = tmplt.get_waveform(sample_rate, taper='start',
+                    store=False)
+
+            # if the duration isn't the same as the last used, have to
+            # regenerate the FD form of the template, and get the correct
+            # sized workspace vectors
+            if N != last_tmplt_N or sample_rate != last_tmplt_rate or \
+                    not htilde:
+                # get the psd and needed workspace vectors
+                if opts.asd_file is not None:
+                    psd = workSpace.get_psd_from_file(df, wfmin, sample_rate,
+                        opts.asd_file)
+                else:
+                    psd = workSpace.get_psd(df, wfmin, sample_rate, psd_model)
+
+                # zero-pad the template and transform
+                tmph = waveform_utils.position_td_template(h, N)
+                htilde = waveform_utils.get_htilde(tmph)
+                del tmph
+
+            last_tmplt_rate = sample_rate
+            last_tmplt_N = N
+            
+            # for the injection, we just need to update the archive
+            # appropriately: if the TD or FD waveform doesn't exist at the
+            # desired rate/length in the archive, the code in waveform_utils
+            # will update it automatically
+            last_rate = last_inj_rate.setdefault(
+                str(inj.params.simulation_id), 0)
+            last_N = last_inj_N.setdefault(str(inj.params.simulation_id), 0)
+            if sample_rate != last_rate:
+                # means we have to regenerate both the TD and FD waveform, so
+                # we clear the archive of the injection's instances of both at
+                # the prior rate/duration
+                if opts.use_injection_cache == 'memory':
+                    try:
+                        del archive[last_rate][str(inj.params.simulation_id)]
+                        del archive[last_N, last_rate][str(
+                            inj.params.simulation_id)]
+                    except KeyError:
+                        pass
+                elif opts.use_injection_cache == 'disk':
+                    try:
+                        del archive['%i' % last_rate][str(
+                            inj.params.simulation_id)]
+                        del archive['%i, %i' %(last_N, last_rate)][str(
+                            inj.params.simulation_id)]
+                    except KeyError:
+                        pass
+            if N != last_N:
+                # means we have to delete the FD waveform
+                if opts.use_injection_cache == 'memory':
+                    try:
+                        del archive[last_N, last_rate][str(inj.params.simulation_id)]
+                    except KeyError:
+                        pass
+                elif opts.use_injection_cache == 'disk':
+                    try:
+                        del archive['%i, %i' %(last_N, last_rate)][str(
+                            inj.params.simulation_id)]
+                    except KeyError:
+                        pass
+            # as a last cleanup, delete any dangling keys that no longer point
+            # to anything in the archive
+            for key in archive.keys():
+                if archive[key].values() == []:
+                    del archive[key]
+
+            # update the rate/duration dicts
+            last_inj_rate[str(inj.params.simulation_id)] = sample_rate
+            last_inj_N[str(inj.params.simulation_id)] = N
+
+            # get the FD injection; this will also store the TD injection if it
+            # doesn't exist in the archive
+            htildeprime = inj.get_fd_waveform(N, sample_rate, wfmin,
+                apply_ifo_response=not opts.no_response_func, ifo=ifo,
+                optimally_oriented=False, archive=archive,
+                store=opts.use_injection_cache is not None)
+
+            # compute fitting factor
+            # Note that because we padded the segment length to be twice the
+            # length of htildeprime and htilde, we do not need to worry
+            # about corruption
+            fitfac, maxidx = filter.match(htildeprime, htilde, psd=psd,
+                low_frequency_cutoff = ofmin)
+            event_time = inj.geocent_time + maxidx / float(sample_rate) \
+                - N/(2.*sample_rate)
+            # store
+            thisResult = overlap_utils.OverlapResult(tmplt.event_id,
+                inj.params.simulation_id)
+            thisResult.segment_length = seg_length
+            thisResult.sample_rate = sample_rate
+            thisResult.overlap_f_min = ofmin 
+            thisResult.waveform_f_min = wfmin
+            thisResult.tmplt_approximant = opts.approximant 
+            thisResult.fitting_factor = fitfac
+            thisResult.event_time = event_time.gpsSeconds
+            thisResult.event_time_ns = event_time.gpsNanoSeconds
+            thisResult.write_all_results_to_database(connection)
+
+            # check time and update checkpoints if needed
+            now = time.time()
+            if (now - last_time)/60. > opts.checkpoint_dt:
+                if opts.verbose:
+                    print >> sys.stdout, "\ncheckpointing..."
+                    sys.stdout.flush()
+                # FIXME: never backing up archive
+                archive = overlap_utils.checkpoint(connection, opts.output_dir,
+                    archive, now, str(inj.params.simulation_id), ii,
+                    str(tmplt.event_id), jj, getpass.getuser(),
+                    backup_archive=False)
+                if working_filename is not None:
+                    # to avoid copy errors, we need to move the database over
+                    # then move it back
+                    dbtables.put_connection_filename(outfile, working_filename,
+                        verbose=False)
+                    working_filename = dbtables.get_connection_filename(
+                        outfile, tmp_path=opts.tmp_space, verbose=False)
+                    connection = sqlite3.connect(working_filename)
+                    dbtables.set_temp_store_directory(connection,
+                        opts.tmp_space, verbose = False)
+                last_time = now
+
+    #
+    #   Best Match Calculations
+    #
+    # done cycling over templates, find the best match for each injection
+    if opts.verbose:
+        print >> sys.stdout, "\nFinding best match and calculating expectation values:"
+
+    best_match_query = "SELECT a.simulation_id, a.event_id, a.fitting_factor, a.event_time, a.event_time_ns, a.segment_length, a.sample_rate FROM all_results AS a WHERE a.simulation_id == ? ORDER BY fitting_factor DESC LIMIT 1"
+
+    for ii, inj in enumerate(injections):
+
+        if opts.verbose:
+            print >> sys.stdout, "Injection %i          \r" % ii,
+            sys.stdout.flush()
+    
+
+        # skip if already analyzed
+        if str(inj.params.simulation_id) in already_analyzed:
+            if opts.verbose:
+                print >> sys.stdout, "Injection %i: skipping\r" % (ii+1),
+                sys.stdout.flush()
+            # advance the random number generator to ensure we get the same results
+            sr, sl, nt = already_analyzed[inj.params.simulation_id]
+            tmp = qm.cplx_vec_t(numpy.zeros(sr*sl))
+            [tmp.gaussian() for nn in range(nt)]
+            del tmp
+            continue
+
+        # get the best match for this injection
+        simid, evid, fitfac, event_time, event_time_ns, seg_length, sample_rate = connection.cursor().execute(best_match_query, (str(inj.params.simulation_id),)).fetchone()
+
+        bestMatch = overlap_utils.OverlapResult(evid, simid)
+        bestMatch.fitting_factor = fitfac
+        bestMatch.event_time = event_time
+        bestMatch.event_time_ns = event_time_ns
+        bestMatch.segment_length = seg_length
+        bestMatch.sample_rate = sample_rate
+        bestMatch.overlap_f_min = ofmin 
+        bestMatch.waveform_f_min = wfmin
+        bestMatch.tmplt_approximant = opts.approximant 
+      
+        # calculate the effective distance
+        # the target snr is stored in eff_dist_t
+        #target_snr = inj.params.eff_dist_t
+        #eff_dist = inj.params.distance / waveform_utils.calculate_eff_dist(htildeprime, psd, ofmin, target_snr)
+
+        # write effective distance
+        #sqlquery = 'UPDATE sim_inspiral SET eff_dist_%s = %f WHERE simulation_id == "%s"' %( ifo.lower()[0], eff_dist, inj.params.simulation_id)
+        #connection.cursor().execute(sqlquery)
+        overlap_utils.write_result_to_database(connection, bestMatch, 'fitting_factor', this_process)
+
+        # check time and update checkpoints if needed
+        now = time.time()
+        if (now - last_time)/60. > opts.checkpoint_dt:
+            if opts.verbose:
+                print >> sys.stdout, "\ncheckpointing..."
+                sys.stdout.flush()
+            # FIXME: just hardcoding username for now
+            username = 'cdcapano'
+            archive = overlap_utils.checkpoint(connection, opts.output_dir, archive, now, str(injections[-1].params.simulation_id), len(injections)-1, str(templates.as_list[-1].event_id), len(templates.as_list)-1, username, backup_archive = False)
+            if working_filename is not None:
+                # to avoid copy errors, we need to move the database over then move it back
+                dbtables.put_connection_filename(outfile, working_filename, verbose = False)
+                working_filename = dbtables.get_connection_filename(outfile, tmp_path = opts.tmp_space, verbose = False)
+                connection = sqlite3.connect(working_filename)
+                dbtables.set_temp_store_directory(connection, opts.tmp_space, verbose = False)
+            last_time = now
+
+    if opts.verbose:
+        print >> sys.stdout, ""
+        sys.stdout.flush()
+    
+    # move onto next file
+    if opts.use_injection_cache == 'disk':
+        waveform_utils.close_scratch_archive(archive)
+    # move the working database to the outfile and delete backups
+    overlap_utils.clean_backup_files(connection)
+    connection.commit()
+    if not opts.save_all_overlaps:
+        if opts.verbose:
+            print >> sys.stdout, "Dropping all_results table and vacuuming..."
+        connection.cursor().execute('DROP TABLE all_results')
+        connection.commit()
+        connection.cursor().execute('VACUUM')
+        connection.commit()
+    connection.close()
+    if opts.tmp_space is not None:
+        dbtables.put_connection_filename(outfile, working_filename, verbose = opts.verbose)
+
+if opts.verbose:
+    print >> sys.stdout, "Finished!"
+
+sys.exit(0)
