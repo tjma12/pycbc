@@ -25,6 +25,16 @@ def get_outfilename(output_directory, ifo, user_tag = None, num = None):
     return '%s/%s-OVERLAPS%s.sqlite' %(output_directory, ifo.upper(), tag)
 
 
+def get_exval_outfilename(output_directory, ifo, user_tag = None, num = None):
+    tag = ''
+    if user_tag is not None:
+        tag = '_%s' % user_tag
+    if num is not None:
+        tag += '-%i' % (num)
+    return '%s/%s-EXPECTATION_VALUES%s.sqlite' %(output_directory, ifo.upper(),
+        tag)
+
+
 def copy_to_output(infile, outfile, verbose = False, warn_overwrite = True, num_retries = 2):
     if verbose:
         print >> sys.stdout, "Copying %s to %s..." %(infile, outfile)
@@ -304,7 +314,7 @@ def get_matching_results(connection, template_apprx, wFmin, verbose = False):
     a database. Returns a dictionary of the injections, the templates,
     and the results mapping them together.
     """
-    import waveformUtils
+    from pycbc.overlaps import waveform_utils
     # FIXME: add template_approx, wFmin and oFmin to OverlapResults so
     # don't have to pass it here
     # get the injections
@@ -342,7 +352,7 @@ def get_matching_results(connection, template_apprx, wFmin, verbose = False):
         injParams = lsctables.SimInspiral()
         [setattr(injParams, col, val) for col,val in zip(sim_inspiral_cols, vals)]
         # create an Injection instance
-        inj = waveformUtils.Injection(injParams)
+        inj = waveform_utils.Injection(injParams)
        
         # add to the dictionary
         injections[str(inj.params.simulation_id)] = inj
@@ -350,8 +360,10 @@ def get_matching_results(connection, template_apprx, wFmin, verbose = False):
     # the templates
     if verbose:
         print >> sys.stdout, "Getting templates..."
-    templates = waveformUtils.TemplateDict()
-    templates.get_templates(connection, template_apprx, wFmin, err_on_no_f_final = False, err_on_no_dur = False, verbose = verbose, only_matching = True) 
+    templates = waveform_utils.TemplateDict()
+    templates.get_templates(connection, template_apprx, wFmin,
+        calc_f_final=False, estimate_dur=False, verbose=verbose,
+        only_matching = True) 
 
     return results, injections, templates
 
