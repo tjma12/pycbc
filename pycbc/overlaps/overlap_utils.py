@@ -109,12 +109,14 @@ class WorkSpace:
             self.psds[N, sample_rate] = getattr(pyPSD, psd_model)(N/2 + 1, df, fmin)
             return self.psds[N, sample_rate]
 
-    def get_psd_from_file(self, df, fmin, sample_rate, asd_file):
+    def get_psd_from_file(self, df, fmin, sample_rate, filename,
+            is_asd_file=True):
         N = int(sample_rate/df)
         try:
             return self.psds[N, sample_rate]
         except KeyError:
-            self.psds[N, sample_rate] = pyPSD.from_asd_txt(asd_file, N/2 + 1, df, fmin)
+            self.psds[N, sample_rate] = pyPSD.from_txt(filename, N/2 + 1, df,
+                fmin, is_asd_file)
             return self.psds[N, sample_rate]
 
     def clear_psds(self):

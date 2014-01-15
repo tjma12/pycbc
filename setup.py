@@ -317,6 +317,7 @@ setup (
                'bin/pycbc_randr_by_snr',
                'bin/pycbc_overlaps',
                'bin/pycbc_calc_exval',
+               'bin/pycbc_overlaps_pipe',
                'bin/hdfcoinc/pycbc_coinc_mergetrigs',
                'bin/hdfcoinc/pycbc_coinc_findtrigs',
                'bin/hdfcoinc/pycbc_coinc_bank2hdf',

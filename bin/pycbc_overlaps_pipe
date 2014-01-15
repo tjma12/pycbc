@@ -1,0 +1,357 @@
+#! /usr/bin/env python
+
+import os, sys
+import tempfile
+import shutil
+import copy
+import warnings
+import numpy
+import ConfigParser
+from optparse import OptionParser
+
+from glue.ligolw import utils
+from glue.ligolw import table
+from glue.ligolw import lsctables
+from glue.ligolw import ligolw
+from glue.ligolw.utils import process
+from glue import pipeline
+
+from pycbc.overlaps import create_injections, overlap_utils
+
+__prog__ = 'pycbc_overlaps_pipe'
+__author__ = 'Collin Capano <collin.capano@ligo.org>'
+__description__ = 'Writes overlap dag and sub files.'
+
+def get_injtmpltDB_filename(output_directory, ifo, tag):
+    """
+    Function to return the combined injection/tmpltbank database file.
+    """
+    return '%s/%s-INJECTIONS_TMPLTBANK%s.sqlite' %( output_directory, ifo, tag.startswith('-') and tag or '_'+tag)
+    
+parser = OptionParser(description = __description__, usage = '%s [options]' % __prog__)
+
+parser.add_option('-l', '--log-path', help = 'Location to put log directory. Must not be a NSF mounted file system.')
+parser.add_option('-t', '--node-local-dir', help = "User's local node directory on which to do database work.")
+parser.add_option('-i', '--ifo', help = 'Detector to use for calculating response.')
+parser.add_option('-u', '--user-tag', help = 'Set a user tag to be applied to the dag.')
+parser.add_option('-c', '--config-file', help = 'Get configuration settings from an ini file.')
+parser.add_option('-s', '--start-seed', type = int, help = 'Start seed for the random number generators. Each node that uses a seed argument will increment this by 1.')
+parser.add_option('-f', '--tmpltbank-file', help = 'Template bank file to use.')
+parser.add_option('-A', '--skip-add-apprx', action='store_true', default=False, help = 'Turn on to skip adding an additional approximant to the injections.')
+
+opts, _ = parser.parse_args()
+
+if opts.ifo is None:
+    raise ValueError, "ifo required"
+if opts.start_seed is None:
+    raise ValueError, "start seed required"
+seed = opts.start_seed - 1
+if not os.path.exists(opts.log_path):
+    raise ValueError, "log path not found"
+if not os.path.exists(opts.config_file):
+    raise ValueError, "config file not found"
+if opts.node_local_dir is None:
+    raise ValueError, 'node-local-dir required'
+if opts.tmpltbank_file is None:
+    raise ValueError, "tmpltbank-file required"
+
+# get ini file
+print "Parsing config-file..."
+cp = ConfigParser.ConfigParser()
+cp.read(opts.config_file)
+# create log file and directory
+tempfile.tempdir = opts.log_path
+basename = '%s%s' %( 'overlaps', opts.user_tag is not None and \
+    '-'+opts.user_tag or '' )
+tempfile.template = '%s.dag.log' % basename
+logfile = tempfile.mktemp()
+fh = open( logfile, 'w' )
+fh.close()
+
+dag = pipeline.CondorDAG(logfile)
+dag.set_dag_file(basename)
+
+# set up directories
+if not os.path.exists('logs/'):
+    os.mkdir('logs/')
+injections_dir = cp.get('pipeline', 'injections-directory')
+if not os.path.exists(injections_dir):
+    os.mkdir(injections_dir)
+inputdbs_dir = cp.get('pipeline', 'inputdbs-directory')
+if not os.path.exists(inputdbs_dir):
+    os.mkdir(inputdbs_dir)
+results_dir = cp.get('pipeline', 'results-directory')
+if not os.path.exists(results_dir):
+    os.mkdir(results_dir)
+if not os.path.exists('executables'):
+    os.mkdir('executables')
+
+universe = cp.get('condor', 'universe')
+
+# get executables and set up job for each
+createInj = cp.get('condor', 'create_inj')
+combineDBs = cp.get('condor', 'combine_databases')
+randDists = cp.get('condor', 'randomize_distances')
+if not opts.skip_add_apprx:
+    addApprx = cp.get('condor', 'add_approximants')
+overlaps_exec = cp.get('condor', 'overlaps')
+exval_exec = cp.get('condor', 'calc_exval')
+
+# check that the executables exist
+jobs = [createInj, combineDBs, randDists, overlaps_exec, exval_exec]
+if not opts.skip_add_apprx:
+    jobs.append(addApprx) 
+for prog in jobs:
+    if not os.path.exists(prog):
+        raise ValueError, 'executable %s not found' % prog
+    # copy to executables directory
+    shutil.copyfile(prog, 'executables/%s' %(os.path.basename(prog)))
+    shutil.copymode(prog,  'executables/%s' %(os.path.basename(prog)))
+
+createInj_job = pipeline.CondorDAGJob(universe, 'executables/%s' %(
+    os.path.basename(createInj)))
+combineDBs_job = pipeline.CondorDAGJob(universe, 'executables/%s' %(
+    os.path.basename(combineDBs)))
+randDists_job = pipeline.CondorDAGJob(universe, 'executables/%s' %(
+    os.path.basename(randDists)))
+if not opts.skip_add_apprx:
+    addApprx_job = pipeline.CondorDAGJob(universe, 'executables/%s' %(
+        os.path.basename(addApprx)))
+overlaps_job = pipeline.CondorDAGJob(universe, 'executables/%s' %(
+    os.path.basename(overlaps_exec)))
+exval_job = pipeline.CondorDAGJob(universe, 'executables/%s' %(
+    os.path.basename(exval_exec)))
+
+jobs = [(createInj, createInj_job), (combineDBs, combineDBs_job),
+    (randDists, randDists_job), (overlaps_exec, overlaps_job),
+    (exval_exec, exval_job)]
+if not opts.skip_add_apprx:
+    jobs.append((addApprx, addApprx_job)) 
+
+# set standard job parameters 
+def set_standard_params(job, jobexec, dagbasename):
+    job.add_condor_cmd('getenv', 'True')
+    job.set_stdout_file('logs/' + os.path.basename(jobexec) + \
+        '-$(cluster)-$(process).out')
+    job.set_stderr_file('logs/' + os.path.basename(jobexec) + \
+        '-$(cluster)-$(process).err')
+    job.set_sub_file('%s.%s.sub' %(os.path.basename(jobexec), dagbasename))
+
+for jobexec, job in jobs:
+    set_standard_params(job, jobexec, basename)
+
+
+#
+#   Set static options
+#
+
+def add_opts_from_ini(cp, section, job):
+    for option in cp.options(section):
+        arg = cp.get(section, option)
+        if arg == '':
+            arg = None
+        job.add_opt(option, arg)
+
+# create_inj
+add_opts_from_ini(cp, 'create_inj', createInj_job)
+createInj_job.add_opt('output-dir', injections_dir)
+
+# combine_databases
+add_opts_from_ini(cp, 'combine_databases', combineDBs_job)
+combineDBs_job.add_opt('tmp-space', opts.node_local_dir)
+
+# randomize distances
+add_opts_from_ini(cp, 'randomize_distances', randDists_job)
+randDists_job.add_opt('tmp-space', opts.node_local_dir)
+
+# add approximants
+if not opts.skip_add_apprx:
+    add_opts_from_ini(cp, 'add_approximants', addApprx_job)
+    addApprx_job.add_opt('tmp-space', opts.node_local_dir)
+
+# overlaps
+add_opts_from_ini(cp, 'overlaps', overlaps_job)
+overlaps_job.add_opt('tmp-space', opts.node_local_dir)
+overlaps_job.add_opt('output-dir', results_dir)
+overlaps_job.add_opt('ifo', opts.ifo)
+
+# expectation values
+add_opts_from_ini(cp, 'calc_exval', exval_job)
+exval_job.add_opt('tmp-space', opts.node_local_dir)
+exval_job.add_opt('output-dir', results_dir)
+exval_job.add_opt('ifo', opts.ifo)
+
+#
+#
+#       Write nodes
+#
+#
+
+#
+#   Create the injections
+#
+
+# We will break the dag up by the desired number of injections
+# per node, with one thread for each injection set
+num_injections = int(cp.get('pipeline', 'num-injections'))
+injections_per_node = int(cp.get('pipeline', 'injections-per-node'))
+num_inj_nodes = int(numpy.ceil(float(num_injections) / injections_per_node))
+remainder = num_injections % injections_per_node
+
+print "Creating threads..."
+exval_nodes = []
+for nn in range(num_inj_nodes):
+
+    thread_tag = '%s%i' %(opts.user_tag is not None and opts.user_tag+'-' or \
+        '', nn)
+
+    # set injection node options
+    createInj_node = pipeline.CondorDAGNode(createInj_job)
+    seed += 1
+    createInj_node.add_var_opt('seed', seed)
+    this_tag = '%i%s%s' %( seed, opts.user_tag is None and '-' or '_',
+        thread_tag)
+    createInj_node.add_var_opt('user-tag', this_tag)
+    # if the last thread, set the number of injections to be the remainder
+    if remainder != 0 and nn == num_inj_nodes-1:
+        createInj_node.add_var_opt('n-points', remainder)
+    else:
+        createInj_node.add_var_opt('n-points', injections_per_node)
+
+    outfile = create_injections.get_outfilename(injections_dir, 'HL',
+        user_tag = this_tag,
+        gz = True)
+    createInj_node.add_output_file(outfile)
+    createInj_node.set_category('create_inj')
+    dag.add_node(createInj_node)
+
+    #
+    #   Create node to add bank, injections into a database
+    #
+    combineDBs_node = pipeline.CondorDAGNode(combineDBs_job)
+    # input injection xml file
+    combineDBs_node.add_file_arg(createInj_node.get_output_files()[0])
+    # input the tmpltbank xml file
+    combineDBs_node.add_file_arg(opts.tmpltbank_file)
+    # the output file
+    outfile = get_injtmpltDB_filename(inputdbs_dir, opts.ifo, thread_tag)
+    combineDBs_node.add_var_opt('database', outfile) 
+    combineDBs_node.add_output_file(outfile)
+    # parent
+    combineDBs_node.add_parent(createInj_node)
+    combineDBs_node.set_category('combine_databases')
+    dag.add_node(combineDBs_node)
+
+    #
+    #   Create node to randomize the distances
+    #
+    randDists_node = pipeline.CondorDAGNode(randDists_job)
+    seed += 1
+    randDists_node.add_var_opt('seed', seed)
+    #randDists_node.add_var_opt('user-tag', thread_tag)
+    randDists_node.add_file_arg(combineDBs_node.get_output_files()[0])
+    randDists_node.add_output_file(combineDBs_node.get_output_files()[0])
+    randDists_node.add_parent(combineDBs_node)
+    randDists_node.set_category('randomize_distance')
+    dag.add_node(randDists_node)
+
+    #
+    #   Create node to add extra approximant
+    #
+    if opts.skip_add_apprx:
+        last_node = randDists_node
+    else:
+        addApprx_node = pipeline.CondorDAGNode(addApprx_job)
+        #addApprx_node.add_var_opt('user-tag', thread_tag)
+        addApprx_node.add_file_arg(combineDBs_node.get_output_files()[0])
+        addApprx_node.add_output_file(combineDBs_node.get_output_files()[0])
+        addApprx_node.add_parent(randDists_node)
+        addApprx_node.set_category('add_approximants')
+        dag.add_node(addApprx_node)
+        last_node = addApprx_node
+
+    #
+    #   Create node to calculate the overlaps
+    #
+    overlaps_node = pipeline.CondorDAGNode(overlaps_job)
+    seed += 1
+    this_tag = '%i%s%s' %(seed, opts.user_tag is None and '-' or '_',
+        thread_tag)
+    overlaps_node.add_var_opt('user-tag', this_tag)
+    overlaps_node.add_file_arg(randDists_node.get_output_files()[0])
+    outfile = overlap_utils.get_outfilename(results_dir, opts.ifo,
+        user_tag = this_tag,
+        num = 0)
+    overlaps_node.add_output_file(outfile)
+    # remove outfile if it already exists
+    if os.path.exists(outfile):
+        warnings.warn('Deleting %s' % outfile)
+        os.remove(outfile)
+    overlaps_node.add_parent(randDists_node)
+    overlaps_node.set_category('overlaps')
+    dag.add_node(overlaps_node)
+
+    #
+    #   Create node to calculate the expectation values
+    #
+    exval_node = pipeline.CondorDAGNode(exval_job)
+    exval_node.add_var_opt('seed', seed)
+    this_tag = '%i%s%s' %(seed, opts.user_tag is None and '-' or '_',
+        thread_tag)
+    exval_node.add_var_opt('user-tag', this_tag)
+    exval_node.add_file_arg(overlaps_node.get_output_files()[0])
+    outfile = overlap_utils.get_exval_outfilename(results_dir, opts.ifo,
+        user_tag = this_tag,
+        num = 0)
+    exval_node.add_output_file(outfile)
+    # remove outfile if it already exists
+    if os.path.exists(outfile):
+        warnings.warn('Deleting %s' % outfile)
+        os.remove(outfile)
+    exval_node.add_parent(overlaps_node)
+    exval_node.set_category('calc_exval')
+    dag.add_node(exval_node)
+    exval_nodes.append(exval_node)
+     
+#
+#   Create a cache of all output files
+#
+print "Writing cache files..."
+f = open(opts.config_file.replace('.ini', '')+'.cache', 'w')
+for outfile in set([outf for node in dag.get_nodes() for outf in \
+        node.get_output_files()]):
+    print >> f, "%s" % os.path.abspath(outfile)
+f.close()
+# creaete a second cache of all result databases
+f = open(opts.config_file.replace('.ini', '')+'-results.cache', 'w')
+for outfile in [outf for node in exval_nodes for outf in \
+        node.get_output_files()]:
+    print >> f, "%s" % os.path.abspath(outfile)
+f.close()
+
+#
+#   Write DAG
+#
+print "Writing dag..."
+# set max jobs
+if cp.has_option('pipeline', 'max-overlaps-jobs'):
+    dag.add_maxjobs_category('overlaps', int(cp.get('pipeline',
+        'max-overlaps-jobs')))
+if cp.has_option('pipeline', 'max-other-jobs'):
+    dag.add_maxjobs_category('add_approximants', int(cp.get('pipeline',
+        'max-other-jobs')))
+    dag.add_maxjobs_category('randomize_distance', int(cp.get('pipeline',
+        'max-other-jobs')))
+    dag.add_maxjobs_category('create_inj', int(cp.get('pipeline',
+        'max-other-jobs')))
+    dag.add_maxjobs_category('combine_databases', int(cp.get('pipeline',
+        'max-other-jobs')))
+    dag.add_maxjobs_category('calc_exval', int(cp.get('pipeline',
+        'max-other-jobs')))
+
+dag.write_sub_files()
+dag.write_dag()
+
+print "Finished!"
+
+sys.exit(0)
