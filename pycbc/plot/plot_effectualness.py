@@ -1,0 +1,224 @@
+import os
+from matplotlib import pyplot
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+width = 3.4
+height = 3.0
+dpi = 300
+pyplot.rcParams.update({
+    "text.usetex": True,
+    "text.verticalalignment": "center",
+    "font.family": "serif",
+    "font.serif": ["Computer Modern Roman"],
+    "font.weight": "bold",
+    "figure.dpi": dpi,
+    "figure.figsize": (width, height),
+    "font.size": 10,
+    "axes.titlesize": 14,
+    "axes.labelsize": 14,
+    "xtick.labelsize": 10,
+    "ytick.labelsize": 10,
+    "legend.fontsize": 10,
+    "scatter.markersize": 1
+    })
+import math
+import numpy
+from pycbc.plot import plot_utils
+
+def plot_effectualness(results, xarg, xlabel, yarg, ylabel,
+        tmplt_label='', inj_label='', logx=False, logy=False,
+        plot_templates=False, templates=[],
+        xmin=None, xmax=None, ymin=None, ymax=None, zmin=None, zmax=None,
+        ptsize=3, cmap=pyplot.cm.Reds_r, dpi=300):
+    
+    fig = pyplot.figure(dpi = dpi)
+    ax = fig.add_subplot(111, axisbg = 'k')
+    plot_data = {}
+    plot_data['args'] = (xarg, yarg)
+    # get x-values
+    xvals = [plot_utils.get_arg(res, xarg) for res in results] 
+    yvals = [plot_utils.get_arg(res, yarg) for res in results]
+    zvals = [res.fitting_factor for res in results]
+    plot_data['data'] = (xvals, yvals, zvals)
+    sc = ax.scatter(xvals, yvals, edgecolors='none', c=zvals, s=ptsize,
+        vmin=zmin, vmax=zmax, zorder=1, cmap=cmap)
+    # make color bar above the plot
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes("top", size = "5%", pad = 0.05)
+    cb = fig.colorbar(sc, cax=cax, orientation='horizontal')#,
+        #ticks = [.8 + (ii*.04) for ii in range(6)])
+    if tmplt_label or inj_label:
+        lbl = ','.join([tmplt_label.strip(), inj_label.strip()])
+    else:
+        lbl = ''
+    cb.ax.set_xlabel('$\mathcal{E}_{\mathrm{%s}}$' % lbl, labelpad=-35)
+    cb.ax.xaxis.set_ticks_position('top')
+
+    # get the axis limits
+    plt_xmin, plt_xmax = ax.get_xlim()
+    if xmin is not None:
+        plt_xmin = xmin
+    if xmax is not None:
+        plt_xmax = xmax
+    plt_ymin, plt_ymax = ax.get_ylim()
+    if ymin is not None:
+        plt_ymin = ymin
+    if ymax is not None:
+        plt_ymax = ymax
+
+    if plot_templates:
+        xvals = [plot_utils.get_arg(tmplt, xarg) for tmplt in templates]
+        yvals = [plot_utils.get_arg(tmplt, yarg) for tmplt in templates]
+        pyplot.scatter(xvals, yvals, edgecolors='gray', marker='x', s=40,
+            zorder=2, alpha=1.0)
+        plot_data['templates'] = (xvals, yvals)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    if logx and logy:
+        ax.loglog()
+    elif logx:
+        ax.semilogx()
+    elif logy:
+        ax.semilogy()
+    # set the axis limits
+    ax.set_xlim(plt_xmin, plt_xmax)
+    ax.set_ylim(plt_ymin, plt_ymax)
+
+    ax.tick_params(axis = 'both', which = 'both', color = 'w')
+    for side in ['top', 'bottom', 'left', 'right']:
+        ax.spines[side].set_color('w')
+
+    return fig, sc, plot_data
+
+
+
+def plotffhist(results, apprx, target_mismatch = 0.97, xmin = None, xmax = None, ymin = None, ymax = None, add_title = True, dpi = 300):
+
+    fig = pyplot.figure(dpi = dpi)
+    ax = fig.add_subplot(111)
+    if xmin is not None and xmax is not None:
+        range = (xmin, xmax)
+    else:
+        range = None
+    ax.hist([x.fitting_factor for x in results], bins = 20, range = range, normed = True, cumulative = True, log = True, zorder = 1)
+    ax.set_xlabel('effectualness')
+    ax.set_ylabel('cumulative fraction')
+    # get axis limits
+    plt_xmin, plt_xmax = ax.get_xlim()
+    if xmin is not None:
+        plt_xmin = xmin
+    if xmax is not None:
+        plt_xmax = xmax
+    plt_ymin, plt_ymax = ax.get_ylim()
+    if ymin is not None:
+        plt_ymin = ymin
+    if ymax is not None:
+        plt_ymax = ymax
+    # plot the target mismatch
+    ax.plot([target_mismatch, target_mismatch], [plt_ymin, plt_ymax], 'r--', linewidth = 2, zorder = 2)
+    # set the axis limits
+    ax.set_xlim(plt_xmin, plt_xmax)
+    ax.set_ylim(plt_ymin, plt_ymax)
+    
+    ax.grid(which = 'both', zorder = 0)
+
+    if add_title:
+        ax.set_title(apprx)
+
+    return fig
+
+
+def plotffcumhist(results, xarg, xlabel, target_mismatch = 0.97, xmin = None, xmax = None, ymin = None, ymax = None, title = None, dpi = 200):
+    import bisect
+
+    if xmin is not None and xmax is not None:
+        range = (xmin, xmax)
+    else:
+        range = None
+    plotvals = sorted([(plot_utils.get_arg(res, xarg), res.fitting_factor) for res in results])
+    yvals = []
+    ffs = []
+    for _, ff in plotvals:
+        bisect.insort(ffs, ff)
+        cumPercent = 100*bisect.bisect_left(ffs, target_mismatch) / float(len(ffs))
+        yvals.append(cumPercent)
+    xvals = [x for x, _ in plotvals]
+
+    fig = pyplot.figure(dpi = dpi)
+    ax = fig.add_subplot(111)
+    ax.semilogy(xvals, yvals)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(r'\%% $< %0.2f$' % target_mismatch)
+
+    # set the axis limits
+    plt_xmin, plt_xmax = ax.get_xlim()
+    if xmin is not None:
+        plt_xmin = xmin
+    if xmax is not None:
+        plt_xmax = xmax
+    plt_ymin, plt_ymax = ax.get_ylim()
+    if ymin is not None:
+        plt_ymin = ymin
+    if ymax is not None:
+        plt_ymax = ymax
+    ax.set_xlim(plt_xmin, plt_xmax)
+    ax.set_ylim(plt_ymin, plt_ymax)
+
+    if title is not None:
+        ax.set_title(title)
+    ax.grid(which = 'both')
+
+    return fig
+
+def plotffbinnedhist(results, xarg, xlabel, target_mismatch = 0.97, nbins = 50, xmin = None, xmax = None, ymin = None, ymax = None, title = None, dpi = 200):
+    import bisect
+
+    if xmin is not None and xmax is not None:
+        range = (xmin, xmax)
+    else:
+        range = None
+    plotvals = sorted([(plot_utils.get_arg(res, xarg), res.fitting_factor) for res in results])
+    xvals = [x for x, _ in plotvals]
+    ffs = [ff for _, ff in plotvals]
+    xbins = numpy.linspace(plotvals[0][0], plotvals[-1][0], num = nbins+1)
+    xbins[-1] *= 1.01
+    yvals = numpy.zeros(nbins)
+    xerr = numpy.zeros(nbins)
+    yerr = numpy.zeros(nbins)
+    for ii, min_val in enumerate(xbins[:-1]):
+        max_val = xbins[ii+1]
+        min_idx = bisect.bisect_left(xvals, min_val)+1
+        max_idx = bisect.bisect_left(xvals, max_val)+1
+        these_ffs = sorted(ffs[min_idx:max_idx])
+        num_less_than_target = float(bisect.bisect_left(these_ffs, target_mismatch))
+        yvals[ii] = 100*num_less_than_target / len(these_ffs)
+        yerr[ii] = numpy.sqrt(num_less_than_target / len(these_ffs))  
+        xerr[ii] = (max_val - min_val)/2.
+
+    xvals = xbins[:-1] + numpy.diff(xbins)/2.
+
+    fig = pyplot.figure(dpi = dpi)
+    ax = fig.add_subplot(111)
+    ax.errorbar(xvals, yvals, xerr = xerr, yerr = yerr, marker = 'o')
+    ax.semilogy()
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(r'\%% $< %0.2f$' % target_mismatch)
+
+    # set the axis limits
+    plt_xmin, plt_xmax = ax.get_xlim()
+    if xmin is not None:
+        plt_xmin = xmin
+    if xmax is not None:
+        plt_xmax = xmax
+    plt_ymin, plt_ymax = ax.get_ylim()
+    if ymin is not None:
+        plt_ymin = ymin
+    if ymax is not None:
+        plt_ymax = ymax
+    ax.set_xlim(plt_xmin, plt_xmax)
+    ax.set_ylim(plt_ymin, plt_ymax)
+
+    if title is not None:
+        ax.set_title(title)
+    ax.grid(which = 'both')
+
+    return fig
