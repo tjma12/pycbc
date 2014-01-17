@@ -166,7 +166,11 @@ for fnum, infile in enumerate(filenames):
         # get the backup archive if we're caching to disk
         backup_arxv_fn = startup_dict['backup_archive']
         if backup_arxv_fn is None:
-            archive = {}
+            if opts.use_injection_cache == 'disk':
+                archive = waveform_utils.get_scratch_archive(tmp_path,
+                    start_archive=backup_arxv_fn)
+            else:
+                archive = {}
         elif opts.use_injection_cache == 'disk':
             # load the archive
             if backup_arxv_fn.endswith('.hdf5'):
