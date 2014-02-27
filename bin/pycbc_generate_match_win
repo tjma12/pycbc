@@ -1,0 +1,267 @@
+#! /usr/bin/env python
+
+import os
+import sys
+import sqlite3
+import random
+
+from pycbc.overlaps import overlap_utils
+import numpy
+from optparse import OptionParser
+from pycbc import plot
+from pycbc.plot import plot_utils
+
+parser = OptionParser()
+parser.add_option('-c', '--cache-file', help = 'cache file containing results databases')
+parser.add_option('-d', '--output-database', help = 'file name of output database')
+parser.add_option('-o', '--plot-directory', default = '.', help = 'directory to save plot(s) to. Default is current.')
+parser.add_option('-u', '--plot-user-tag', help = 'user tag for plot(s)')
+parser.add_option('-R', '--replace', action = 'store_true', default = False, help = 'replace the param window database if it exists. Default is to add to the database if it exists.') 
+parser.add_option('-p', '--primary', metavar='param_name[:param_label]', help = 'Name of the primary parameter to generate a window for. Can optionally also specify a label to use for the parameter for the plots.')
+parser.add_option('', '--primary-parameters', metavar='num_bins:[log|lin]:lower_std_fac:upper_std_fac[:lower_offset:upper_offset]', help='The parameters for the primary window.')
+parser.add_option('', '--secondary', help = 'Optional: name of the secondary paramter to generate a window for.')
+parser.add_option('', '--secondary-parameters', metavar='num_bins:[log|lin]:lower_std_fac:upper_std_fac', help='The parameters for the secondary window.') 
+parser.add_option('-T', '--num-test-points', type = 'int', default = 0, help = 'use the given number of test points as tests of the window')
+parser.add_option('--plot-percentage', action = 'store_true', default = False, help = 'Color the points by the percentage of templates that will be filtered for each point.')
+parser.add_option('--plot-zoom', action='store_true', default=False, help='Create a second axis zoomed onto the desired area. Zoom limits are set by zoom-xlims and zoom-ylims.')
+parser.add_option('--zoom-xlims', metavar='xmin,xmax', help = 'X-limits for zoomed axis. If not specified, will be the same as the full plot.')
+parser.add_option('--zoom-ylims', metavar='ymin,ymax', help = 'Y-limits for zoomed axis. If not specified, will be the same as the full plot.')
+parser.add_option('--plot-param-window', action = 'store_true', default = False, help = 'Plot the param window.')
+parser.add_option('-D', '--dpi', type = 'int', default = 200, help = 'dpi to use for plots')
+parser.add_option('-A', '--x-min', type = 'float', help = 'min x for plot')
+parser.add_option('-B', '--x-max', type = 'float', help = 'max x for plot')
+parser.add_option('-U', '--y-min', type = 'float', help = 'min y for plot')
+parser.add_option('-V', '--y-max', type = 'float', help = 'max y for plot')
+parser.add_option('-P', '--apply-cut', action = 'append', default = [], metavar = 'arg:min,max', help = 'apply cut to injections; can specify multiple times')
+
+opts, _ = parser.parse_args()
+
+if opts.output_database is None:
+    raise ValueError, 'output-database required'
+dbname = opts.output_database
+
+if opts.zoom_xlims is not None:
+    opts.zoom_xlims = map(float, opts.zoom_xlims.split(','))
+if opts.zoom_ylims is not None:
+    opts.zoom_ylims = map(float, opts.zoom_ylims.split(','))
+
+if opts.primary is None:
+    raise ValueError, '--primary is required' 
+if len(opts.primary.split(':')) == 2:
+    primary, primary_label = map(str.strip, opts.primary.split(':'))
+else:
+    primary = primary_label = opts.primary.strip()
+
+if opts.primary_parameters is None:
+    raise ValueError, '--primary-parameters is required'
+primary_params = opts.primary_parameters.split(':')
+if len(primary_params) < 4:
+    raise ValueError, "Missing parameter in --primary-parameters. See help message."
+if len(primary_params) == 4:
+    primary_nbins, primary_dist, primary_lower_std, primary_upper_std = \
+        primary_params
+    primary_lower_offset =  primary_upper_offset = 0.
+elif len(primary_params) == 5:
+    primary_nbins, primary_dist, primary_lower_std, primary_upper_std, \
+        primary_lower_offset = primary_params
+    primary_upper_offset = 0.
+elif len(primary_params) == 6:
+    primary_nbins, primary_dist, primary_lower_std, primary_upper_std, \
+        primary_lower_offset, primary_upper_offset = primary_params
+else:
+    raise ValueError, "Too many parameters in --primary-parameters. See help message."
+
+if not (primary_dist == 'lin' or primary_dist == 'log'):
+    raise ValueError, 'bin distribution must be "lin" or "log"'
+primary_nbins = int(primary_nbins)
+primary_lower_std, primary_upper_std, primary_lower_offset, \
+    primary_upper_offset = map(float, [primary_lower_std, primary_upper_std,
+        primary_lower_offset, primary_upper_offset])
+
+if opts.plot_user_tag is not None:
+    tag = '_%s' % opts.plot_user_tag
+else:
+    tag = ''
+apply_cut = {}
+for thiscut in opts.apply_cut:
+    param, ranges = thiscut.split(':')
+    apply_cut[param] = tuple(map(float, ranges.split(',')))
+
+print "getting results"
+filenames = plot_utils.parse_results_cache(opts.cache_file)
+injected_vals = {}
+recovered_vals = {}
+sqlquery = """
+SELECT
+    inj.waveform, inj.mass1, inj.mass2, inj.spin1z, inj.spin2z, tmplt.mass1,
+    tmplt.mass2, tmplt.spin1z, tmplt.spin2z, res.tmplt_approximant
+FROM
+    sim_inspiral AS inj
+JOIN
+    sngl_inspiral AS tmplt, coinc_event_map AS mapA,
+    coinc_event_map AS mapB
+ON (
+    inj.simulation_id == mapA.event_id AND
+    mapA.coinc_event_id == mapB.coinc_event_id AND
+    tmplt.event_id == mapB.event_id)
+JOIN
+    overlap_results AS res
+ON
+    res.coinc_event_id == mapA.coinc_event_id
+"""
+for ii,filename in enumerate(filenames):
+    print "%i / %i\r" %(ii+1, len(filenames)),
+    sys.stdout.flush()
+    connection = sqlite3.connect(filename)
+    try:
+        connection.cursor().execute("""
+        CREATE INDEX IF NOT EXISTS
+            cem_ei_index
+        ON coinc_event_map (event_id)""")
+    except sqlite3.OperationalError:
+        connection.close()
+        continue
+    except sqlite3.DatabaseError:
+        connection.close()
+        print "Database Error: %s" % filename
+        continue
+    try:
+        for (waveform, inj_m1, inj_m2, inj_s1z, inj_s2z, found_m1,
+                found_m2, found_s1z, found_s2z, tmplt_apprx) in \
+                connection.cursor().execute(sqlquery):
+            inj = plot_utils.Result()
+            inj.m1 = inj_m1
+            inj.m2 = inj_m2
+            inj.s1z = inj_s1z
+            inj.s2z = inj_s2z
+            inj.apprx = waveform
+            if apply_cut and not plot_utils.result_in_range(inj, apply_cut):
+                continue
+            tmplt = plot_utils.Result()
+            tmplt.m1 = found_m1
+            tmplt.m2 = found_m2
+            tmplt.s1z = found_s1z
+            tmplt.s2z = found_s2z
+            tmplt.apprx = tmplt_apprx
+            injected_vals.setdefault((waveform, tmplt_apprx), [])
+            injected_vals[waveform, tmplt_apprx].append(inj)
+            recovered_vals.setdefault((waveform, tmplt_apprx), [])
+            recovered_vals[waveform, tmplt_apprx].append(tmplt)
+        connection.close()
+    except sqlite3.OperationalError:
+        connction.close()
+        continue
+print ""
+print "getting templates"
+templates = numpy.array([plot_utils.get_arg(tmplt, primary) for tmplt in \
+    plot_utils.get_templates(filenames[0])])
+
+print "calculating window and plotting"
+ftmplt = '%s/match_window%s-%s.png'
+param_windows = {}
+for (inj_apprx, tmplt_apprx) in injected_vals:
+    inj_params = numpy.array([plot_utils.get_arg(inj, primary) for inj in \
+        injected_vals[inj_apprx, tmplt_apprx]])
+    rec_params = numpy.array([plot_utils.get_arg(tmplt, primary) \
+        for tmplt in recovered_vals[inj_apprx, tmplt_apprx]])
+    missed_inj = []
+    missed_rec = []
+    if opts.num_test_points:
+        test_indices = set()
+        while len(test_indices) < opts.num_test_points:
+            test_indices.add(random.randint(0, len(inj_params)-1))
+        test_indices = (numpy.array(sorted(test_indices)),)
+        calc_indices = (numpy.setdiff1d(numpy.arange(len(inj_params)),
+            test_indices[0]),)
+        test_inj_params = inj_params[test_indices]
+        test_rec_params = rec_params[test_indices]
+        inj_params = inj_params[calc_indices]
+        rec_params = rec_params[calc_indices]
+    if primary_dist == 'log':
+        param_bins = numpy.logspace(numpy.log10(min(inj_params)),
+            numpy.log10(max(inj_params)), num = primary_nbins+1) 
+    else:
+        param_bins = numpy.linspace(min(inj_params), max(inj_params),
+            num = primary_nbins+1) 
+    param_bins[-1] *= 1.01
+    pw_list = overlap_utils.ParamWindowList([])
+    pw_list.set_param(primary)
+    pw_list.set_approximants(inj_apprx, tmplt_apprx)
+    param_windows[inj_apprx, tmplt_apprx] = pw_list
+    for ii, min_val in enumerate(param_bins[:-1]):
+        max_val = param_bins[ii+1]
+        binned_idx = (numpy.intersect1d(numpy.where(inj_params >= min_val)[0],
+            numpy.where(inj_params < max_val)[0]),)
+        binned_inj = inj_params[binned_idx]
+        binned_rec = rec_params[binned_idx]
+        jitter = (binned_rec - binned_inj)/binned_inj
+        min_jitter = jitter.min() - primary_lower_std*jitter.std() \
+            - primary_lower_offset
+        max_jitter = jitter.max() + primary_upper_std*jitter.std() \
+            + primary_upper_offset
+        pw = overlap_utils.ParamWindow(min_val, max_val)
+        pw.set_jitter(min_jitter, max_jitter)
+        param_windows[inj_apprx, tmplt_apprx].append(pw)
+    # test
+    if opts.num_test_points:
+        print "getting test injections missed by the parameter windows"
+        missed_indices = [nn for nn,(recval, injval) in \
+            enumerate(zip(test_rec_params, test_inj_params)) if recval not in \
+            pw_list[pw_list.find(injval)].recovery_window(injval)]
+        print "Used %i %s injections" %(len(inj_params), inj_apprx)
+        print "Missed %i %s injections" %(len(missed_indices), inj_apprx)
+    # calculate color array: this is the percentage of templates that
+    # will be filtered
+    if opts.plot_percentage:
+        print "calculating perecentage of templates filtered"
+        c_label = '\% Templates Filtered'
+        winidx = [param_windows[inj_apprx, tmplt_apprx].find(x) for x in \
+            injected_vals[inj_apprx, tmplt_apprx]]
+        percent_filtered = numpy.zeros(len(injected_vals[inj_apprx,
+            tmplt_apprx]))
+        if opts.num_test_points:
+            inj_params = numpy.array([getattr(inj, primary) \
+            for inj in injected_vals[inj_apprx, tmplt_apprx]])
+        for pw in param_windows[inj_apprx, tmplt_apprx]:
+            # get the templates that could possibly be filtered in this array
+            binned_tmplts = templates[(numpy.intersect1d(numpy.where(
+                templates >= pw.min_recovered(pw.min_injected))[0],
+                numpy.where(templates < pw.max_recovered(pw.max_injected))[0]),
+                )]
+            binned_inj_idx = numpy.intersect1d(numpy.where(
+                inj_params >= pw.min_injected)[0], numpy.where(
+                inj_params < pw.max_injected)[0])
+            for ii in binned_inj_idx:
+                percent_filtered[ii] = 100*len([tmplt for tmplt in \
+                    binned_tmplts if tmplt in \
+                    pw.recovery_window(inj_params[ii])]) / \
+                    float(len(templates))
+    else:
+        c_label = percent_filtered = None
+
+    if opts.plot_param_window:
+        plot_pw = param_windows[inj_apprx, tmplt_apprx]
+    else:
+        plot_pw = None
+    fig = plot.plot_param_bias(
+        injected_vals[inj_apprx, tmplt_apprx],
+        recovered_vals[inj_apprx, tmplt_apprx], primary, primary_label,
+        c_array=percent_filtered, log_c=False, c_label=c_label,
+        param_windows=plot_pw, pwin_missed_indices=missed_indices,
+        xmin=opts.x_min, xmax=opts.x_max, ymin=opts.y_min, ymax=opts.y_max,
+        plot_zoom=opts.plot_zoom, zoom_xlims=opts.zoom_xlims,
+        zoom_ylims=opts.zoom_ylims)
+    fig.savefig('%s/plot_param_bias%s-%s_%s.png' %(opts.plot_directory, tag,
+        inj_apprx, tmplt_apprx), dpi=opts.dpi, bbox_inches='tight')
+
+
+#
+#   Save the parameter windows to a database
+#
+if opts.replace and os.path.exists(dbname):
+    os.remove(dbname)
+connection = sqlite3.connect(dbname)
+for pw_list in param_windows.values():
+    pw_list.write_to_database(connection)
+connection.commit()
+connection.close()

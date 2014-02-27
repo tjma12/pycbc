@@ -1,34 +1,37 @@
 import os
-import pylab
-pylab.rcParams.update({
+from matplotlib import pyplot
+width = 3.4
+height = 3.0
+dpi = 300
+pyplot.rcParams.update({
     "text.usetex": True,
     "text.verticalalignment": "center",
-    #"lines.markersize": 12,
-    #"lines.markeredgewidth": 2,
     "font.family": "serif",
     "font.serif": ["Computer Modern Roman"],
     "font.weight": "bold",
-    "font.size": 16,
-    "axes.titlesize": 24,
-    "axes.labelsize": 26,
-    "xtick.labelsize": 16,
-    "ytick.labelsize": 16,
-    "legend.fontsize": 16,
+    "figure.dpi": dpi,
+    "figure.figsize": (width, height),
+    "font.size": 10,
+    "axes.titlesize": 14,
+    "axes.labelsize": 14,
+    "xtick.labelsize": 10,
+    "ytick.labelsize": 10,
+    "legend.fontsize": 10,
+    "scatter.markersize": 1
     })
 import math
 import numpy
-import plotUtils
+from pycbc.plot import plot_utils
 import lal
 import lalsimulation as lalsim
-import waveformUtils
-import overlapUtils
-import qm
+from pycbc.overlaps import waveform_utils
+from pycbc.overlaps import overlap_utils
 
 def ColorFormatter(y, pos):
     return "$10^{%.1f}$" % y
 
 def plot_waveforms(h, hprime, dpi = 300):
-    fig = pylab.figure()
+    fig = pyplot.figure()
     # plot the full waveforms
     ax = fig.add_subplot(111)
     time = hprime.deltaT * numpy.arange(hprime.data.length)# + hprime.epoch.gpsSeconds + 1e-9*h.epoch.gpsNanoSeconds
@@ -44,18 +47,15 @@ def plot_waveforms(h, hprime, dpi = 300):
 def get_phase_diff(h, hprime, overlap_fmin, psd_fmin, psd_model = 'aLIGOZeroDetHighPower', asd_file = None):
     import lal
     import lalsimulation as lalsim
-    import qm
-    import waveformUtils
-    import overlapUtils
     
-    workSpace = overlapUtils.WorkSpace()
+    workSpace = overlap_utils.WorkSpace()
 
     # get the psd model to use
     if asd_file is None:
         min_length = 0
     # if using an asd file, the df must be greater than what's in the file
     else:
-        min_length = 1. / overlapUtils.get_asd_file_df(asd_file)
+        min_length = 1. / overlap_utils.get_asd_file_df(asd_file)
    
     # calculate N
     sample_rate = 1./h.deltaT
@@ -63,11 +63,11 @@ def get_phase_diff(h, hprime, overlap_fmin, psd_fmin, psd_model = 'aLIGOZeroDetH
     df = sample_rate / N
     fftplan = workSpace.get_fftplan(N)
 
-    hpad = waveformUtils.zero_pad_h(h, N, 0, overwrite = False)
-    htilde = waveformUtils.convert_lalFS_to_qm(waveformUtils.get_htilde(hpad, N, df, fftplan), scale = qm.DYN_RANGE_FAC*sample_rate)
+    hpad = waveform_utils.zero_pad_h(h, N, 0, overwrite = False)
+    htilde = waveform_utils.convert_lalFS_to_qm(waveform_utils.get_htilde(hpad, N, df, fftplan), scale = qm.DYN_RANGE_FAC*sample_rate)
 
-    hpad = waveformUtils.zero_pad_h(hprime, N, N/2, overwrite = False)
-    htildeprime = waveformUtils.convert_lalFS_to_qm(waveformUtils.get_htilde(hpad, N, df, fftplan), scale = qm.DYN_RANGE_FAC*sample_rate)
+    hpad = waveform_utils.zero_pad_h(hprime, N, N/2, overwrite = False)
+    htildeprime = waveform_utils.convert_lalFS_to_qm(waveform_utils.get_htilde(hpad, N, df, fftplan), scale = qm.DYN_RANGE_FAC*sample_rate)
 
     # get the psd
     if asd_file is not None:
@@ -85,7 +85,7 @@ def get_phase_diff(h, hprime, overlap_fmin, psd_fmin, psd_model = 'aLIGOZeroDetH
 
 def plot_overlap(h, hprime, overlap_fmin, psd_fmin, psd_model = 'aLIGOZeroDetHighPower', asd_file = None, dpi = 300):
     
-    workSpace = overlapUtils.WorkSpace()
+    workSpace = overlap_utils.WorkSpace()
 
     # get the psd model to use
     if asd_file is None:
@@ -93,7 +93,7 @@ def plot_overlap(h, hprime, overlap_fmin, psd_fmin, psd_model = 'aLIGOZeroDetHig
         min_length = 0
     # if using an asd file, the df must be greater than what's in the file
     else:
-        min_length = 1. / overlapUtils.get_asd_file_df(asd_file)
+        min_length = 1. / overlap_utils.get_asd_file_df(asd_file)
    
     # calculate N
     sample_rate = 1./h.deltaT
@@ -101,11 +101,11 @@ def plot_overlap(h, hprime, overlap_fmin, psd_fmin, psd_model = 'aLIGOZeroDetHig
     df = sample_rate / N
     fftplan = workSpace.get_fftplan(N)
 
-    hpad = waveformUtils.zero_pad_h(h, N, 0, overwrite = False)
-    htilde = waveformUtils.convert_lalFS_to_qm(waveformUtils.get_htilde(hpad, N, df, fftplan), scale = qm.DYN_RANGE_FAC*sample_rate)
+    hpad = waveform_utils.zero_pad_h(h, N, 0, overwrite = False)
+    htilde = waveform_utils.convert_lalFS_to_qm(waveform_utils.get_htilde(hpad, N, df, fftplan), scale = qm.DYN_RANGE_FAC*sample_rate)
 
-    hpad = waveformUtils.zero_pad_h(hprime, N, N/2, overwrite = False)
-    htildeprime = waveformUtils.convert_lalFS_to_qm(waveformUtils.get_htilde(hpad, N, df, fftplan), scale = qm.DYN_RANGE_FAC*sample_rate)
+    hpad = waveform_utils.zero_pad_h(hprime, N, N/2, overwrite = False)
+    htildeprime = waveform_utils.convert_lalFS_to_qm(waveform_utils.get_htilde(hpad, N, df, fftplan), scale = qm.DYN_RANGE_FAC*sample_rate)
 
     # get the psd
     if asd_file is not None:
@@ -116,7 +116,7 @@ def plot_overlap(h, hprime, overlap_fmin, psd_fmin, psd_model = 'aLIGOZeroDetHig
     fitfac = qm.fd_fd_match(None, htildeprime, htilde, psd, overlap_fmin, None, None, None).array()
     maxidx = numpy.where(fitfac == fitfac.max())[0][0]
 
-    fig = pylab.figure()
+    fig = pyplot.figure()
     ax1 = fig.add_subplot(211)
     time = h.deltaT * (numpy.arange(N) + numpy.nonzero(h.data.data)[0][-1])
     ax1.plot(time, fitfac)
@@ -140,7 +140,10 @@ def plot_overlap(h, hprime, overlap_fmin, psd_fmin, psd_model = 'aLIGOZeroDetHig
 
     return fig
 
-def plot_param_bias(injected_values, recovered_values, param_arg, param_label, c_array = None, log_c = False, c_label = None, param_windows = None, missed_inj = None, missed_rec = None, xmin = None, xmax = None, ymin = None, ymax = None):
+def plot_param_bias(injected_values, recovered_values, param_arg, param_label,
+    c_array=None, log_c=False, c_label=None, param_windows=None,
+    pwin_missed_indices=None, xmin=None, xmax=None, ymin=None,
+    ymax=None, plot_zoom=False, zoom_xlims=None, zoom_ylims=None):
     """
     Plots (found - injected)/found of given parameter.
 
@@ -148,41 +151,66 @@ def plot_param_bias(injected_values, recovered_values, param_arg, param_label, c
      will use the fitting factors.
     @log_c: make the color bar logarithmic
     """
-    fig = pylab.figure()
     # get injected values
     inj_vals = numpy.array([getattr(inj, param_arg) for inj in injected_values])
     found_vals = numpy.array([getattr(tmplt, param_arg) for tmplt in recovered_values])
-    if c_array is None:
-        c_array = [result.fitting_factor for result in injected_values]
-        c_label = 'Fitting Factor'
-    if log_c:
-        c_array = numpy.log10(c_array)
-    ax = fig.add_subplot(121)
-    ax2 = fig.add_subplot(122)
-    sc = ax.scatter(inj_vals, (found_vals - inj_vals)/inj_vals, c = c_array, edgecolors = 'none')
-    sc = ax2.scatter(inj_vals, (found_vals - inj_vals)/inj_vals, c = c_array, edgecolors = 'none')
-    cb = fig.colorbar(sc, format = log_c and pylab.FuncFormatter(ColorFormatter) or None)
-    if c_label:
-        cb.ax.set_ylabel(c_label)
+    if plot_zoom:
+        pyplot.rcParams.update({
+            "figure.figsize": (7., 3.)})
+        fig = pyplot.figure()
+        ax = fig.add_subplot(121)
+        ax2 = fig.add_subplot(122)
+    else:
+        fig = pyplot.figure()
+        ax = fig.add_subplot(111)
+    if c_array is not None:
+        if log_c:
+            c_array = numpy.log10(c_array)
+        sc = ax.scatter(inj_vals, 100.*(found_vals - inj_vals)/inj_vals,
+            c=c_array, edgecolors='none')
+        if plot_zoom:
+            sc = ax2.scatter(inj_vals, 100*(found_vals - inj_vals)/inj_vals,
+                c=c_array, edgecolors = 'none')
+        cb = fig.colorbar(sc, format=log_c and pyplot.FuncFormatter(
+            ColorFormatter) or None)
+        if c_label:
+            cb.ax.set_ylabel(c_label)
+    else:
+        sc = ax.scatter(inj_vals, 100*(found_vals - inj_vals)/inj_vals,
+            edgecolors='none')
+        if plot_zoom:
+            sc = ax2.scatter(inj_vals, 100*(found_vals - inj_vals)/inj_vals,
+                edgecolors = 'none')
+
+    if pwin_missed_indices:
+        pwin_missed_indices = numpy.array(pwin_missed_indices)
+        xvals = inj_vals[(pwin_missed_indices,)]
+        yvals = found_vals[(pwin_missed_indices,)]
+        yvals = 100*(yvals - xvals)/xvals
+        ax.scatter(xvals, yvals, c='k', marker='x', s=30, zorder=10)
+        if plot_zoom:
+            ax2.scatter(xvals, yvals, c='k', marker='x', s=30, zorder=10)
+
     if param_windows is not None:
         inj_vals = sorted(inj_vals)
         # the lower bound
         winidx = [param_windows.find(x) for x in inj_vals]
         recbnd = numpy.array([param_windows[ii].min_recovered(x) for ii,x in zip(winidx, inj_vals)])
-        yvals = (recbnd - inj_vals) / inj_vals
+        yvals = 100.*(recbnd - inj_vals) / inj_vals
         ax.plot(inj_vals, yvals, 'k--', linewidth = 2, zorder = 10)
-        ax2.plot(inj_vals, yvals, 'k--', linewidth = 2, zorder = 10)
+        if plot_zoom:
+            ax2.plot(inj_vals, yvals, 'k--', linewidth = 2, zorder = 10)
         # the upper bound
         recbnd = numpy.array([param_windows[ii].max_recovered(x) for ii,x in zip(winidx, inj_vals)])
-        yvals = (recbnd - inj_vals) / inj_vals
+        yvals = 100.*(recbnd - inj_vals) / inj_vals
         ax.plot(inj_vals, yvals, 'k--', linewidth = 2, zorder = 10)
-        ax2.plot(inj_vals, yvals, 'k--', linewidth = 2, zorder = 10)
+        if plot_zoom:
+            ax2.plot(inj_vals, yvals, 'k--', linewidth = 2, zorder = 10)
 
-    if missed_inj is not None and len(missed_inj) > 0:
-        ax.scatter(missed_inj, (missed_rec - missed_inj)/missed_inj, c = 'k', marker = 'x', s = 40, zorder = 10)
-        ax2.scatter(missed_inj, (missed_rec - missed_inj)/missed_inj, c = 'k', marker = 'x', s = 40, zorder = 10)
     ax.set_xlabel(param_label)
-    ax.set_ylabel(r'$\Delta$%s / %s' %(param_label, param_label))
+    ax.set_ylabel(r'(Rec. - Inj.) / Inj. (\%)')
+    if plot_zoom:
+        ax2.set_xlabel(param_label)
     plt_xmin, plt_xmax = ax.get_xlim()
     plt_ymin, plt_ymax = ax.get_ylim()
     if xmin is not None:
@@ -195,49 +223,87 @@ def plot_param_bias(injected_values, recovered_values, param_arg, param_label, c
         plt_ymax = ymax
     ax.set_xlim(plt_xmin, plt_xmax)
     ax.set_ylim(plt_ymin, plt_ymax)
-    ax2.set_xlim(0, 10)
-    ax2.set_ylim(-0.2, 0.2)#plt_ymin, plt_ymax)
+    if plot_zoom and zoom_xlims is not None:
+        ax2.set_xlim(zoom_xlims)
+    if plot_zoom and zoom_ylims is not None:
+        ax2.set_ylim(zoom_ylims)
     
     return fig
 
-def plot_recovered_injected(injected_values, recovered_values, param_arg, param_label, c_array = None, log_c = False, c_label = None, param_windows = None, missed_inj = None, missed_rec = None, xmin = None, xmax = None, ymin = None, ymax = None):
+def plot_recovered_injected(injected_values, recovered_values, param_label,
+    param_windows=None, pwin_missed_indices=None, xmin=None, xmax=None,
+    ymin=None, ymax=None, plot_zoom=False, zoom_xlims=None, zoom_ylims=None):
     """
     Plots recovered vs injected of given parameter.
+
+    pwin_missed_indices: list
+        List of injections that would be missed if the given parameter window
+        list were used.
     """
-    fig = pylab.figure()
-    # get injected values
-    inj_vals = numpy.array([getattr(inj, param_arg) for inj in injected_values])
-    found_vals = numpy.array([getattr(tmplt, param_arg) for tmplt in recovered_values])
-    if c_array is None:
-        c_array = [result.fitting_factor for result in injected_values]
-        c_label = 'Fitting Factor'
+    if plot_zoom:
+        pyplot.rcParams.update({
+            "figure.figsize": (7., 3.)})
+        fig = pyplot.figure()
+        ax = fig.add_subplot(121)
+        ax2 = fig.add_subplot(122)
+    else:
+        fig = pyplot.figure()
+        ax = fig.add_subplot(111)
 
-    ax1 = fig.add_subplot(121)
-    sc = ax1.scatter(inj_vals, found_vals, c = c_array, edgecolors = 'none')
-    ax2 = fig.add_subplot(122)
-    sc = ax2.scatter(inj_vals, found_vals, c = c_array, edgecolors = 'none')
-    cb = fig.colorbar(sc, format = log_c and pylab.FuncFormatter(ColorFormatter) or None)
-    if c_label:
-        cb.ax.set_ylabel(c_label)
+    sc = ax.scatter(injected_values, recovered_values, edgecolors='none',
+        zorder=1)
+    if plot_zoom:
+        sc = ax2.scatter(injected_values, recovered_values, edgecolors='none',
+            zorder=1)
+
     if param_windows is not None:
-        inj_vals = sorted(inj_vals)
-        # the lower bound
-        winidx = [param_windows.find(x) for x in inj_vals]
-        recbnd = numpy.array([param_windows[ii].min_recovered(x) for ii,x in zip(winidx, inj_vals)])
-        ax1.plot(inj_vals, recbnd, 'k--', linewidth = 2, zorder = 10)
-        ax2.plot(inj_vals, recbnd, 'k--', linewidth = 2, zorder = 10)
-        # the upper bound
-        recbnd = numpy.array([param_windows[ii].max_recovered(x) for ii,x in zip(winidx, inj_vals)])
-        ax1.plot(inj_vals, recbnd, 'k--', linewidth = 2, zorder = 10)
-        ax2.plot(inj_vals, recbnd, 'k--', linewidth = 2, zorder = 10)
-    if missed_inj is not None and len(missed_inj) > 0:
-        ax1.scatter(missed_inj, missed_rec, c = 'k', marker = 'x', s = 40, zorder = 10)
-        ax2.scatter(missed_inj, missed_rec, c = 'k', marker = 'x', s = 40, zorder = 10)
+        if pwin_missed_indices:
+            pwin_missed_indices = numpy.array(pwin_missed_indices)
+            ax.scatter(injected_values[(pwin_missed_indices,)],
+                recovered_values[(pwin_missed_indices,)],
+                edgecolors='r', marker='x', s=30, zorder=2)
+            if plot_zoom:
+                ax2.scatter(injected_values[(pwin_missed_indices,)],
+                    recovered_values[(pwin_missed_indices,)],
+                    edgecolors='r', marker='x', s=30, zorder=2)
 
-    ax1.set_xlabel('Injected %s' % param_label)
-    ax1.set_ylabel('Recovered %s' % param_label)
-    ax1.set_xlim(0,100)
-    ax2.set_xlim(0, 10)
-    ax2.set_ylim(0, 10)
+        # plot the windows
+        injected_values = sorted(injected_values)
+
+        # the lower bound
+        winidx = [param_windows.find(x) for x in injected_values]
+        recbnd = numpy.array([param_windows[ii].min_recovered(x) for ii,x in \
+            zip(winidx, injected_values)])
+        ax.plot(injected_values, recbnd, 'k--', linewidth=2, zorder=3)
+        if plot_zoom:
+            ax2.plot(injected_values, recbnd, 'k--', linewidth=2, zorder=3)
+
+        # the upper bound
+        recbnd = numpy.array([param_windows[ii].max_recovered(x) for ii,x in \
+            zip(winidx, injected_values)])
+        ax.plot(injected_values, recbnd, 'k--', linewidth=2, zorder=3)
+        if plot_zoom:
+            ax2.plot(injected_values, recbnd, 'k--', linewidth=2, zorder=3)
+
+    ax.set_xlabel('Injected %s' % param_label)
+    ax.set_ylabel('Recovered %s' % param_label)
+    if plot_zoom:
+        ax2.set_xlabel('Injected %s' % param_label)
+    plt_xmin, plt_xmax = ax.get_xlim()
+    plt_ymin, plt_ymax = ax.get_ylim()
+    if xmin is not None:
+        plt_xmin = xmin
+    if xmax is not None:
+        plt_xmax = xmax
+    if ymin is not None:
+        plt_ymin = ymin
+    if ymax is not None:
+        plt_ymax = ymax
+    ax.set_xlim(plt_xmin, plt_xmax)
+    ax.set_ylim(plt_ymin, plt_ymax)
+    if plot_zoom and zoom_xlims is not None:
+        ax2.set_xlim(zoom_xlims)
+    if plot_zoom and zoom_ylims is not None:
+        ax2.set_ylim(zoom_ylims)
     
     return fig
