@@ -515,7 +515,7 @@ class Injection:
 
                 # compute the strain in the detector
                 if apply_ifo_response:
-                    detector = lalsim.InstrumentNameToLALDetector(ifo)
+                    detector = lalsim.DetectorPrefixToLALDetector(ifo)
                     h = lalsim.SimDetectorStrainREAL8TimeSeries(hplus, hcross, self.params.longitude, self.params.latitude, self.params.polarization, detector)
                 else:
                     h = hplus
