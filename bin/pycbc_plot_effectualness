@@ -53,7 +53,7 @@ else:
 
 print "getting results"
 filenames = plot_utils.parse_results_cache(opts.cache_file)
-inj_results, _ = plot_utils.get_injection_results(filenames, get_inj_map=False)
+inj_results, _ = plot_utils.get_injection_results(filenames, get_inj_map=False, verbose=True)
 apply_cut = {}
 for thiscut in opts.apply_cut:
     arg, vals = thiscut.split(':')
@@ -63,7 +63,17 @@ if apply_cut:
     inj_results = plot_utils.slice_results(inj_results, apply_cut)
 if opts.plot_templates:
     print "getting templates"
-    templates = plot_utils.get_templates(filenames[0])
+    ii = 0
+    templates = []
+    while not templates:
+        try:
+            templates = plot_utils.get_templates(filenames[ii])
+        except:
+            pass
+        ii += 1
+        if ii >= len(filenames):
+            break
+
 else:
     templates = []
 
