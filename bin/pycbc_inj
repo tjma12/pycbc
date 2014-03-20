@@ -97,6 +97,7 @@ if max_q == numpy.inf:
     max_q = max_mass / min_mass
 if min_mtotal == -numpy.inf:
     min_mtotal = min_mass + min_mass * min_q
+if max_mtotal == numpy.inf:
     max_mtotal = max_mass + max_mass/min_q
 if opts.spin1z_range is not None:
     min_spin1z, max_spin1z = map(float, opts.spin1z_range.split(','))
