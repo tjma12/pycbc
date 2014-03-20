@@ -44,8 +44,16 @@ def plot_effectualness(results, xarg, xlabel, yarg, ylabel,
     # make color bar above the plot
     divider = make_axes_locatable(ax)
     cax = divider.append_axes("top", size = "5%", pad = 0.05)
-    cb = fig.colorbar(sc, cax=cax, orientation='horizontal')#,
-        #ticks = [.8 + (ii*.04) for ii in range(6)])
+    # ensure that there are only ever 6 ticks
+    nticks = 5
+    precision = 3 # the number of digits to print after the decimal
+    if zmin is None:
+        zmin = min(zvals)
+    if zmax is None:
+        zmax = max(zvals)
+    dz = (zmax - zmin)/float(nticks)
+    cb = fig.colorbar(sc, cax=cax, orientation='horizontal',
+        ticks=[round(zmin + (ii*dz), precision) for ii in range(nticks+1)])
     if tmplt_label or inj_label:
         lbl = ','.join([tmplt_label.strip(), inj_label.strip()])
     else:
@@ -68,8 +76,8 @@ def plot_effectualness(results, xarg, xlabel, yarg, ylabel,
     if plot_templates:
         xvals = [plot_utils.get_arg(tmplt, xarg) for tmplt in templates]
         yvals = [plot_utils.get_arg(tmplt, yarg) for tmplt in templates]
-        pyplot.scatter(xvals, yvals, edgecolors='gray', marker='x', s=40,
-            zorder=2, alpha=1.0)
+        ax.scatter(xvals, yvals, edgecolors='g', c='g', marker='x', s=40,
+            zorder=10)
         plot_data['templates'] = (xvals, yvals)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
@@ -91,16 +99,26 @@ def plot_effectualness(results, xarg, xlabel, yarg, ylabel,
 
 
 
-def plotffhist(results, apprx, target_mismatch = 0.97, xmin = None, xmax = None, ymin = None, ymax = None, add_title = True, dpi = 300):
+def plot_effectualness_cumhist(results, tmplt_label='', inj_label='',
+        target_mismatch=0.97, nbins=20, xmin=None, xmax=None, ymin=None,
+        ymax=None, logy=False, dpi=300):
 
-    fig = pyplot.figure(dpi = dpi)
+    plot_data = {}
+    fig = pyplot.figure(dpi=dpi)
     ax = fig.add_subplot(111)
     if xmin is not None and xmax is not None:
         range = (xmin, xmax)
     else:
         range = None
-    ax.hist([x.fitting_factor for x in results], bins = 20, range = range, normed = True, cumulative = True, log = True, zorder = 1)
-    ax.set_xlabel('effectualness')
+    cnt, bins, _ = ax.hist([x.fitting_factor for x in results], bins=nbins,
+        range=range, normed=True, cumulative=True, log=logy, zorder=1)
+    plot_data['bins'] = bins
+    plot_data['count'] = cnt
+    if tmplt_label or inj_label:
+        lbl = ','.join([tmplt_label.strip(), inj_label.strip()])
+    else:
+        lbl = ''
+    ax.set_xlabel('$\mathcal{E}_{\mathrm{%s}}$' % lbl)
     ax.set_ylabel('cumulative fraction')
     # get axis limits
     plt_xmin, plt_xmax = ax.get_xlim()
@@ -114,17 +132,15 @@ def plotffhist(results, apprx, target_mismatch = 0.97, xmin = None, xmax = None,
     if ymax is not None:
         plt_ymax = ymax
     # plot the target mismatch
-    ax.plot([target_mismatch, target_mismatch], [plt_ymin, plt_ymax], 'r--', linewidth = 2, zorder = 2)
+    ax.plot([target_mismatch, target_mismatch], [plt_ymin, plt_ymax], 'r--',
+        linewidth=2, zorder=2)
     # set the axis limits
     ax.set_xlim(plt_xmin, plt_xmax)
     ax.set_ylim(plt_ymin, plt_ymax)
     
     ax.grid(which = 'both', zorder = 0)
 
-    if add_title:
-        ax.set_title(apprx)
-
-    return fig
+    return fig, plot_data
 
 
 def plotffcumhist(results, xarg, xlabel, target_mismatch = 0.97, xmin = None, xmax = None, ymin = None, ymax = None, title = None, dpi = 200):
