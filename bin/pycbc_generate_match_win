@@ -3,7 +3,7 @@
 import os
 import sys
 import sqlite3
-import random
+from numpy import random
 
 from pycbc.overlaps import overlap_utils
 import numpy
@@ -21,7 +21,8 @@ parser.add_option('-p', '--primary', metavar='param_name[:param_label]', help = 
 parser.add_option('', '--primary-parameters', metavar='num_bins:[log|lin]:lower_std_fac:upper_std_fac[:lower_offset:upper_offset]', help='The parameters for the primary window.')
 parser.add_option('', '--secondary', help = 'Optional: name of the secondary paramter to generate a window for.')
 parser.add_option('', '--secondary-parameters', metavar='num_bins:[log|lin]:lower_std_fac:upper_std_fac', help='The parameters for the secondary window.') 
-parser.add_option('-T', '--num-test-points', type = 'int', default = 0, help = 'use the given number of test points as tests of the window')
+parser.add_option('-T', '--num-test-points', type = 'int', default = 0, help = 'use the given number of test points as tests of the window. Points are selected randomly; to specify the seed value, use rand-seed.')
+parser.add_option('-S', '--rand-seed', type='int', help='If using test points, specify a seed value to use for the random number generator.')
 parser.add_option('--plot-percentage', action = 'store_true', default = False, help = 'Color the points by the percentage of templates that will be filtered for each point.')
 parser.add_option('--plot-zoom', action='store_true', default=False, help='Create a second axis zoomed onto the desired area. Zoom limits are set by zoom-xlims and zoom-ylims.')
 parser.add_option('--zoom-xlims', metavar='xmin,xmax', help = 'X-limits for zoomed axis. If not specified, will be the same as the full plot.')
@@ -35,6 +36,8 @@ parser.add_option('-V', '--y-max', type = 'float', help = 'max y for plot')
 parser.add_option('-P', '--apply-cut', action = 'append', default = [], metavar = 'arg:min,max', help = 'apply cut to injections; can specify multiple times')
 
 opts, _ = parser.parse_args()
+
+random.seed(opts.rand_seed)
 
 if opts.output_database is None:
     raise ValueError, 'output-database required'
@@ -164,8 +167,6 @@ for (inj_apprx, tmplt_apprx) in injected_vals:
         injected_vals[inj_apprx, tmplt_apprx]])
     rec_params = numpy.array([plot_utils.get_arg(tmplt, primary) \
         for tmplt in recovered_vals[inj_apprx, tmplt_apprx]])
-    missed_inj = []
-    missed_rec = []
     if opts.num_test_points:
         test_indices = set()
         while len(test_indices) < opts.num_test_points:
@@ -205,9 +206,14 @@ for (inj_apprx, tmplt_apprx) in injected_vals:
     # test
     if opts.num_test_points:
         print "getting test injections missed by the parameter windows"
-        missed_indices = [nn for nn,(recval, injval) in \
+        missed_indices = numpy.array([nn for nn,(recval, injval) in \
             enumerate(zip(test_rec_params, test_inj_params)) if recval not in \
-            pw_list[pw_list.find(injval)].recovery_window(injval)]
+            pw_list[pw_list.find(injval)].recovery_window(injval)])
+        if len(missed_indices) == 0:
+            missed_inj = missed_rec = None
+        else:
+            missed_inj = test_inj_params[(missed_indices,)]
+            missed_rec = test_rec_params[(missed_indices,)]
         print "Used %i %s injections" %(len(inj_params), inj_apprx)
         print "Missed %i %s injections" %(len(missed_indices), inj_apprx)
     # calculate color array: this is the percentage of templates that
@@ -247,7 +253,7 @@ for (inj_apprx, tmplt_apprx) in injected_vals:
         injected_vals[inj_apprx, tmplt_apprx],
         recovered_vals[inj_apprx, tmplt_apprx], primary, primary_label,
         c_array=percent_filtered, log_c=False, c_label=c_label,
-        param_windows=plot_pw, pwin_missed_indices=missed_indices,
+        param_windows=plot_pw, missed_inj=missed_inj, missed_rec=missed_rec,
         xmin=opts.x_min, xmax=opts.x_max, ymin=opts.y_min, ymax=opts.y_max,
         plot_zoom=opts.plot_zoom, zoom_xlims=opts.zoom_xlims,
         zoom_ylims=opts.zoom_ylims)
