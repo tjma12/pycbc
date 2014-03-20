@@ -1,6 +1,6 @@
 #! /usr/bin/env python
 
-import os
+import os, sys
 import math
 import sqlite3
 import numpy
@@ -74,14 +74,17 @@ def parse_results_cache(cache_file):
     f.close()
     return filenames
 
-def get_injection_results(filenames, get_inj_map = True, ref_apprx = None, test_apprx = None):
+def get_injection_results(filenames, get_inj_map = True, ref_apprx = None, test_apprx = None, verbose=False):
     if get_inj_map and (test_apprx is None or ref_apprx is None):
         raise ValueError, "If want an inj_map, must provide a reference and test approximate"
     sqlquery = 'select sim.waveform, sim.simulation_id, sim.mass1, sim.mass2, sim.spin1z, sim.spin2z, sim.eff_dist_h, sim.distance, sim.inclination, sim.eff_dist_t, tmplt.event_id, tmplt.mass1, tmplt.mass2, res.fitting_factor, res.snr, res.snr_std, res.chisq, res.chisq_std, res.chisq_dof, res.new_snr, res.new_snr_std, res.num_successes, res.sample_rate, res.coinc_event_id from overlap_results as res join sim_inspiral as sim, coinc_event_map as map on sim.simulation_id == map.event_id and map.coinc_event_id == res.coinc_event_id join sngl_inspiral as tmplt, coinc_event_map as mapB on mapB.coinc_event_id == map.coinc_event_id and mapB.event_id == tmplt.event_id'
     results = {}
     reftest_map = {}
     idx = 0
-    for thisfile in filenames:
+    for ii,thisfile in enumerate(filenames):
+        if verbose:
+            print >> sys.stdout, "%i / %i\r" %(ii+1, len(filenames)),
+            sys.stdout.flush()
         if not thisfile.endswith('.sqlite'):
             continue
         connection = sqlite3.connect(thisfile)
@@ -133,6 +136,9 @@ def get_injection_results(filenames, get_inj_map = True, ref_apprx = None, test_
             reftest_map.update(dict([ [id_map[id1], id_map[id2]] for id1,id2 in inj_map.items() if id1 in id_map and id2 in id_map]))
 
         connection.close()
+
+    if verbose:
+        print >> sys.stdout, ""
 
     return results, reftest_map
 
