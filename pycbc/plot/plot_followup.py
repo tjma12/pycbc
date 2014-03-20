@@ -142,7 +142,7 @@ def plot_overlap(h, hprime, overlap_fmin, psd_fmin, psd_model = 'aLIGOZeroDetHig
 
 def plot_param_bias(injected_values, recovered_values, param_arg, param_label,
     c_array=None, log_c=False, c_label=None, param_windows=None,
-    pwin_missed_indices=None, xmin=None, xmax=None, ymin=None,
+    missed_inj=None, missed_rec=None, xmin=None, xmax=None, ymin=None,
     ymax=None, plot_zoom=False, zoom_xlims=None, zoom_ylims=None):
     """
     Plots (found - injected)/found of given parameter.
@@ -182,11 +182,9 @@ def plot_param_bias(injected_values, recovered_values, param_arg, param_label,
             sc = ax2.scatter(inj_vals, 100*(found_vals - inj_vals)/inj_vals,
                 edgecolors = 'none')
 
-    if pwin_missed_indices:
-        pwin_missed_indices = numpy.array(pwin_missed_indices)
-        xvals = inj_vals[(pwin_missed_indices,)]
-        yvals = found_vals[(pwin_missed_indices,)]
-        yvals = 100*(yvals - xvals)/xvals
+    if missed_inj is not None and missed_rec is not None:
+        xvals = missed_inj
+        yvals = 100.*(missed_rec - missed_inj)/missed_inj
         ax.scatter(xvals, yvals, c='k', marker='x', s=30, zorder=10)
         if plot_zoom:
             ax2.scatter(xvals, yvals, c='k', marker='x', s=30, zorder=10)
@@ -232,7 +230,8 @@ def plot_param_bias(injected_values, recovered_values, param_arg, param_label,
 
 def plot_recovered_injected(injected_values, recovered_values, param_label,
     param_windows=None, pwin_missed_indices=None, xmin=None, xmax=None,
-    ymin=None, ymax=None, plot_zoom=False, zoom_xlims=None, zoom_ylims=None):
+    ymin=None, ymax=None, plot_zoom=False, zoom_xlims=None, zoom_ylims=None,
+    point_size=None, effectualness=[]):
     """
     Plots recovered vs injected of given parameter.
 
@@ -250,11 +249,20 @@ def plot_recovered_injected(injected_values, recovered_values, param_label,
         fig = pyplot.figure()
         ax = fig.add_subplot(111)
 
-    sc = ax.scatter(injected_values, recovered_values, edgecolors='none',
-        zorder=1)
+    if effectualness != []:
+        clrs = effectualness
+    else:
+        clrs = 'b'
+    sc = ax.scatter(injected_values, recovered_values, s=point_size, c=clrs,
+        edgecolors='none', zorder=1)
+
+    if effectualness != []:
+        cb = fig.colorbar(sc) 
+        cb.set_label('$\mathcal{E}$')
+
     if plot_zoom:
-        sc = ax2.scatter(injected_values, recovered_values, edgecolors='none',
-            zorder=1)
+        sc = ax2.scatter(injected_values, recovered_values, s=point_size, c=clrs,
+            edgecolors='none', zorder=1)
 
     if param_windows is not None:
         if pwin_missed_indices:

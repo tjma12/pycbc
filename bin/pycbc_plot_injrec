@@ -20,7 +20,9 @@ parser.add_option('--plot-zoom', action='store_true', default=False, help='Creat
 parser.add_option('--zoom-xlims', metavar='xmin,xmax', help = 'X-limits for zoomed axis. If not specified, will be the same as the full plot.')
 parser.add_option('--zoom-ylims', metavar='ymin,ymax', help = 'Y-limits for zoomed axis. If not specified, will be the same as the full plot.')
 parser.add_option('--param-window-db', help='Optional. Plot the parameter window in the given database. One of the parameters listed in the database must be the same as param-name.')
-parser.add_option('-D', '--dpi', type = 'int', default = 200, help = 'dpi to use for plots')
+parser.add_option('--plot-effectualness', action='store_true', default=False, help='Optional. Color points by their effectualness.')
+parser.add_option('-D', '--dpi', type = 'int', default = 300, help = 'dpi to use for plots')
+parser.add_option('-S', '--point-size', type = 'int', help='point size to use for markers')
 parser.add_option('-A', '--x-min', type = 'float', help = 'min x for plot')
 parser.add_option('-B', '--x-max', type = 'float', help = 'max x for plot')
 parser.add_option('-U', '--y-min', type = 'float', help = 'min y for plot')
@@ -57,7 +59,8 @@ recovered_vals = {}
 sqlquery = """
 SELECT
     inj.waveform, inj.mass1, inj.mass2, inj.spin1z, inj.spin2z, tmplt.mass1,
-    tmplt.mass2, tmplt.spin1z, tmplt.spin2z, res.tmplt_approximant
+    tmplt.mass2, tmplt.spin1z, tmplt.spin2z, res.tmplt_approximant,
+    res.fitting_factor
 FROM
     sim_inspiral AS inj
 JOIN
@@ -90,7 +93,7 @@ for ii,filename in enumerate(filenames):
         continue
     try:
         for (waveform, inj_m1, inj_m2, inj_s1z, inj_s2z, found_m1,
-                found_m2, found_s1z, found_s2z, tmplt_apprx) in \
+                found_m2, found_s1z, found_s2z, tmplt_apprx, ff) in \
                 connection.cursor().execute(sqlquery):
             inj = plot_utils.Result()
             inj.m1 = inj_m1
@@ -98,6 +101,7 @@ for ii,filename in enumerate(filenames):
             inj.s1z = inj_s1z
             inj.s2z = inj_s2z
             inj.apprx = waveform
+            inj.fitting_factor = ff
             if apply_cut and not plot_utils.result_in_range(inj, apply_cut):
                 continue
             tmplt = plot_utils.Result()
@@ -129,6 +133,11 @@ for (inj_apprx, tmplt_apprx) in injected_vals:
     rec_params = numpy.array([plot_utils.get_arg(tmplt, param_name) \
         for tmplt in recovered_vals[inj_apprx, tmplt_apprx]])
 
+    if opts.plot_effectualness:
+        effectualness = [inj.fitting_factor for inj in \
+            injected_vals[inj_apprx, tmplt_apprx]]
+    else:
+        effectualness = []
     # load the parameter windows
     if opts.param_window_db is not None:
         print "loading parameter windows"
@@ -148,7 +157,8 @@ for (inj_apprx, tmplt_apprx) in injected_vals:
         param_windows=pw_list, pwin_missed_indices=missed_indices,
         xmin=opts.x_min, xmax=opts.x_max, ymin=opts.y_min, ymax=opts.y_max,
         plot_zoom=opts.plot_zoom, zoom_xlims=opts.zoom_xlims,
-        zoom_ylims=opts.zoom_ylims)
+        zoom_ylims=opts.zoom_ylims, point_size=opts.point_size,
+        effectualness=effectualness)
 
     fig.savefig('%s/plot_injrec%s-%s_%s.png' %(opts.plot_directory, tag,
         inj_apprx, tmplt_apprx), dpi=opts.dpi, bbox_inches='tight')
