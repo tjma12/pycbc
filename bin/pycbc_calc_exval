@@ -4,8 +4,9 @@ __prog__ = 'pycbc_calc_exval'
 __author__ = 'Collin Capano <collin.capano@ligo.org>'
 __description__ = \
 """Calculates SNR, and chisq values for a set of signals given a set of
-injections with matching templates. Values are stored for the best match,
-determined by SNR and New SNR."""
+injections with matching templates. This will be done for every map found
+between injections in a sim_inspiral table and templates in a sngl_inspiral
+table. Values are stored for the best match, determined by SNR and New SNR."""
 
 import sqlite3
 import numpy
@@ -41,38 +42,62 @@ parser.add_option("-p", "--psd-model", help = "What PSD model to use for overlap
 parser.add_option("-A", "--asd-file", help = "Load the PSD from a dat file containing an ASD. If both this and psd-model specified, this will take precedence.")
 parser.add_option('-f', '--waveform-f-min', type = 'float', help = "Frequency at which to start the waveform generation (in Hz).")
 parser.add_option('-F', '--overlap-f-min', type = 'float', help = "Frequency at which to start the overlap (in Hz). Note: This must be larger than waveform-f-min.")
+parser.add_option('-r', '--sample-rate', type = 'int', help = "Sample rate to use (in Hz). Must be a power of 2. Required if vary-n not used.")
+parser.add_option('-l', '--segment-length', type = 'int', help = "Segment length to use (in s). Must be a power of 2. Required if vary-n not used.")
+parser.add_option('-N', '--vary-n', action='store_true', default=False, help='If turned on, the sample rate and segment length used will be set to the smallest possible value between a given template and injection pair. This speeds up calculations, but may reduce the accuracy of the SNR.')
 parser.add_option('-n', '--n-realizations', type = 'int', help = "Number of noise realizations to generate to calculate the mean snr, chisq, and new-snr.")
-parser.add_option('-i', '--ifo', help = "What ifo to inject into.")
-parser.add_option('--no-response-func', action = 'store_true', default = False, help = "Do not apply the detector response function to the injections. This will effectively put all injections overhead the detector. The injections' inclination angles will still be applied, however.")
-parser.add_option('-U', '--user-tag', help = "User tag to add to all Overlap files.")
+parser.add_option('-i', '--ifo', help = "What ifo to inject into. If none specified, no response function will be applied to the injections.")
+parser.add_option('-U', '--user-tag', help = "User tag to add to all output files.")
 parser.add_option('-a', '--approximant', help = "Approximant to use for the templates.")
 parser.add_option('-b', '--n-chisq-bins', type = 'int', help = 'Number of chisq bins to use.')
+parser.add_option('-M', '--use-waveform-cache', metavar = '"memory" or "disk"', help = "Use a cache to save waveforms. This will speed up computation time if you have the same injection mapped to multiple templates, or the same template mapped to multiple injections. Options are 'memory' or 'disk'. If 'memory', all waveforms will be stored in memory. If 'disk', waveforms will be stored to a temporary h5py archive. If a temp-space is specified, this temporary archive will be placed there; otherwise, it will be created in the current working directory.")
 parser.add_option('-T', '--checkpoint-dt', type = 'float', default = numpy.inf, help = 'Number of minutes between checkpoints. Default is infinity, meaning no checkpointing.')
 parser.add_option('-R', '--replace', action='store_true', default=False, help = 'If the output database already exists, overwrite it. Default action is not to overwrite.')
-parser.add_option('-X', '--overwrite-results', action = 'store_true', default = False, help = 'If snr, chisq, and new snr already exist in the database, overwrite them. Otherwise, results with these values populated will be skipped. Note that this turning this option on effectively turns off checkpointing.')
+parser.add_option('-X', '--overwrite-results', action = 'store_true', default = False, help = 'If snr, chisq, and new snr already exist in the database, overwrite them. Otherwise, results with these values populated will be skipped. Note that turning this option on effectively turns off checkpointing.')
 parser.add_option('-S', '--seed', type = 'int', default = int((time.time()*100)% 1e6), help = 'Set the seed to use for the gaussian noise generator. If none specified, will use the current time.')
 parser.add_option('-v', '--verbose', action = 'store_true', help = 'Be verbose.')
 
 opts, filenames = parser.parse_args()
 
 # check options
-if opts.ifo is None:
-    raise ValueError, "--ifo required"
-ifo = opts.ifo.upper()
-if len(ifo) != 2:
-    raise ValueError, "--ifo must be of format [site][number], e.g., 'H1'"
-if ifo.startswith('T'):
-    raise ValueError, "Because eff_dist_t is used to store target snrs, --ifo cannot start with T"
+ifo = opts.ifo
+if opts.ifo is not None:
+    ifo = ifo.upper()
+    if len(ifo) != 2:
+        raise ValueError("--ifo must be of format [site][number], e.g., 'H1'")
 wfmin = opts.waveform_f_min
 ofmin = opts.overlap_f_min
 if ofmin < wfmin:
     raise ValueError, "--waveform-f-min must be less than overlap-f-min"
+
+if not opts.vary_n:
+    if opts.sample_rate is None:
+        raise ValueError("if not --vary-n, must specify a sample-rate")
+    sample_rate = opts.sample_rate
+    if sample_rate is None or numpy.log2(sample_rate) % 1 != 0.:
+        raise ValueError("--sample-rate must be a power of 2")
+    if opts.segment_length is None:
+        raise ValueError("if not --vary-n, must specify a segment-length")
+    seg_length = opts.segment_length
+    if seg_length is None or numpy.log2(seg_length) % 1 != 0.:
+        raise ValueError("--segment-length must be a power of 2")
+    N = sample_rate * seg_length
+    df = 1./seg_length
+
+if opts.asd_file is None and opts.psd_model is None:
+    raise ValueError("must specify --asd-file or --psd-model")
+if opts.asd_file is not None and not os.path.exists(opts.asd_file):
+    raise ValueError("asd-file %s not found" % opts.asd_file)
+
 if not opts.n_realizations:
     raise ValueError, "--n-realizations required"
-if opts.asd_file is None and opts.psd_model is None:
-    raise ValueError, "must specify --asd-file or --psd-model"
-if opts.asd_file is not None and not os.path.exists(opts.asd_file):
-    raise ValueError, "asd-file %s not found" % opts.asd_file
+
+# create a waveform archive if desired
+if opts.use_waveform_cache == 'disk':
+    archive = waveform_utils.get_scratch_archive(
+        opts.tmp_space is not None and opts.tmp_space or '.')
+else:
+    archive = {}
 
 # set the start time
 last_time = time.time()
@@ -83,10 +108,6 @@ work_space = overlap_utils.WorkSpace()
 # get the psd model to use
 if opts.asd_file is None:
     psd_model = opts.psd_model
-    min_length = 0
-# if using an asd file, the df must be greater than what's in the file
-else:
-    min_length = 1. / overlap_utils.get_asd_file_df(opts.asd_file)
 
 for fnum, infile in enumerate(filenames):
 
@@ -126,62 +147,96 @@ for fnum, infile in enumerate(filenames):
             'process_id')
 
     # get the injections and matching templates
-    results, injections, templates = overlap_utils.get_matching_results(
-        connection, opts.approximant, wfmin, verbose = opts.verbose)
+    if opts.verbose:
+        print >> sys.stdout, "Getting injections and matching templates..."
+    inj_tmplt_map = overlap_utils.get_injection_template_map(connection)
+    injections = waveform_utils.InjectionDict()
+    injections.get_injections(connection, wfmin, archive=archive,
+        calc_f_final=opts.vary_n, estimate_dur=opts.vary_n,
+        verbose=opts.verbose)
+    templates = waveform_utils.TemplateDict()
+    templates.get_templates(connection, opts.approximant, wfmin,
+        archive=archive, calc_f_final=True, estimate_dur=True,
+        verbose=opts.verbose, only_matching=True)
 
-    # get results that have already been analyzed
+    # if we're overwriting results, easiest thing to do is to just drop the
+    # results table, since we'll next create one if it doesn't exist
+    if opts.overwrite_results:
+        connection.cursor().execute('DROP TABLE IF EXISTS overlap_results') 
+
+    # create the overlap results table if it doesn't exist yet 
+    overlap_utils.create_results_table(connection)
+
+    # get results that have already been analyzed: these are results
+    # where the snr, chisq and new_snr are filled in
+    # this is done by first deleting any results in the overlaps_results
+    # table that do not have these values filled in, then getting the list
+    # of coinc_event_ids that remain. This way, if we are calculating
+    # expectation values from the output of a pycbc_overlaps job, all the
+    # results will be written over.
     sqlquery = """
-        SELECT
-            overlap_results.coinc_event_id
-        FROM
+        DELETE FROM
             overlap_results
         WHERE
-            snr IS NOT NULL AND
-            chisq IS NOT NULL AND
-            new_snr IS NOT NULL
+            snr IS NULL AND
+            chisq IS NULL AND
+            new_snr IS NULL
         """
-    if opts.overwrite_results:
-        already_analyzed = []
-    else:
-        already_analyzed = [ceid for (ceid,) in
-            connection.cursor().execute(sqlquery)]
+    connection.cursor().execute(sqlquery)
+
+    already_analyzed = [ceid for (ceid,) in connection.cursor().execute(
+        'SELECT coinc_event_id FROM overlap_results')]
+
+    # remove maps from the inj_tmplt_map table that were already analyzed
+    if opts.verbose:
+        skip_num = len(already_analyzed)
+        print >> sys.stdout, "Skipping %i injections" % skip_num 
+    for ceid in already_analyzed:
+        inj_tmplt_map.pop(ceid)
 
     #
     #   Cycle over the results, calculating the expectation values for each
     #
-    for ii, (ceid, this_result) in enumerate(results.items()):
-
-        if ceid in already_analyzed:
-            continue
+    for ii, (ceid, (simid, tmpltid)) in enumerate(inj_tmplt_map.items()):
 
         if opts.verbose:
-            print >> sys.stdout, "Injection %i\r" % (ii+1),
+            print >> sys.stdout, "Injection %i\r" % (ii+1+skip_num),
             sys.stdout.flush()
-        
-        # get the filtering parameters to use
-        sample_rate = this_result.sample_rate
-        ofmin = this_result.overlap_f_min
-        wfmin = this_result.waveform_f_min
+       
+        inj = injections[simid]
+        tmplt = templates[tmpltid]
 
-        # get the time-domain injection and template
-        tmplt = templates[this_result.event_id]
-        h = tmplt.get_waveform(sample_rate, taper='start', store=False)
+        # get the sample rate and segment length to use
+        if opts.vary_n:
+            sample_rate = int(2**(numpy.ceil(numpy.log2(
+                max(tmplt.get_f_final(), inj.get_f_final()))+1)))
 
-        inj = injections[this_result.simulation_id]
-        hprime = inj.get_waveform(sample_rate, wfmin,
-            apply_ifo_response=not opts.no_response_func, ifo=ifo,
-            optimally_oriented=False, store=False)
+            # get the segment length to use
+            # we'll set the segment length to be four times the max duration
+            # of this template and the injection
+            seg_length = int(2**(numpy.ceil(numpy.log2(
+                max(tmplt.get_duration(), inj.get_duration())))+2))
 
-        # calculate the segment length to use
-        N = int(2**(numpy.ceil(numpy.log2(max(len(h), len(hprime),
-            sample_rate*min_length)))+2))
-        seg_length = N / sample_rate
-        df = 1./seg_length
+            N = sample_rate * seg_length
+            df = 1./seg_length
 
+        # set the segment start time; we'll always make this to be
+        # the injection's end_time - 2.5 times its estimated duration
+        segment_start = inj.detector_end_time(ifo) - 2.5*inj.get_duration()
+
+        # get the FD injection and waveform
+        # Note that these will also store the TD versions if they don't
+        # exist in the archive
+        htildeprime = inj.get_fd_waveform(sample_rate, seg_length,
+            ifo, segment_start, store=opts.use_waveform_cache is not None)
+        htilde = tmplt.get_fd_waveform(sample_rate, seg_length,
+            store=opts.use_waveform_cache is not None)
+
+        # we'll need a place to store snr and correlations
         snr_work_mem = pytypes.zeros(N,
-            dtype=complex_same_precision_as(hprime))
+            dtype=complex_same_precision_as(htilde))
         corr_work_mem = pytypes.zeros(N,
-            dtype=complex_same_precision_as(hprime))
+            dtype=complex_same_precision_as(htilde))
 
         # get psd and needed workspace vectors
         if opts.asd_file is not None:
@@ -190,14 +245,14 @@ for fnum, infile in enumerate(filenames):
         else:
             psd = work_space.get_psd(df, wfmin, sample_rate, psd_model)
 
-        # zero-pad the template and transform
-        h = waveform_utils.position_td_template(h, N)
-        htilde = waveform_utils.get_htilde(h)
-
-
-        # we put the injection in the middle of the segment
-        hprime = waveform_utils.zero_pad_h(hprime, N, N/2)
-        htildeprime = waveform_utils.get_htilde(hprime)
+        # compute the effectualness
+        # Note that because we padded the segment length to be twice the
+        # length of htildeprime and htilde, we do not need to worry
+        # about corruption
+        effectualness, maxidx = filter.match(htildeprime, htilde, psd=psd,
+            low_frequency_cutoff = ofmin)
+        time_offset = segment_start + maxidx / float(sample_rate) - \
+            inj.geocent_time
 
         # cycle over the desired number of sample times, calculating snr,
         # chisq, and newsnr for each
@@ -254,6 +309,17 @@ for fnum, infile in enumerate(filenames):
                 newsnrs.append(newsnr)
                 num_successes += 1
 
+        # store the results
+        this_result = overlap_utils.OverlapResult(tmplt, inj)
+        this_result.segment_length = seg_length
+        this_result.sample_rate = sample_rate
+        this_result.overlap_f_min = ofmin 
+        this_result.waveform_f_min = wfmin
+        this_result.tmplt_approximant = opts.approximant 
+        this_result.effectualness = effectualness
+        this_result.time_offset = time_offset.gpsSeconds
+        this_result.time_offset_ns = time_offset.gpsNanoSeconds
+
         # compute mean, st. devs.
         if num_successes > 0:
             snrs = numpy.array(snrs)
@@ -279,18 +345,8 @@ for fnum, infile in enumerate(filenames):
         this_result.num_successes = num_successes
 
         # dump to output database
-        sqlquery = """
-            UPDATE
-                overlap_results
-            SET
-                snr = ?, snr_std = ?, chisq = ?, chisq_std = ?, chisq_dof = ?,
-                new_snr = ?, new_snr_std = ?
-            WHERE
-                coinc_event_id = ?"""
-        connection.cursor().execute(sqlquery, (this_result.snr,
-            this_result.snr_std, this_result.chisq, this_result.chisq_std,
-            this_result.chisq_dof, this_result.new_snr,
-            this_result.new_snr_std, ceid))
+        this_result.write_to_database(connection, ceid)
+
         connection.commit()
 
         # check time and update checkpoints if needed

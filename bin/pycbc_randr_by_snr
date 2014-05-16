@@ -83,42 +83,32 @@ for fnum, infile in enumerate(filenames):
     # cycle over the injections, calculating results for each
     if opts.verbose:
         print >> sys.stdout, "Cycling over injections..."
-    sim_inspiral_cols = sqlutils.get_column_names_from_table(connection, 'sim_inspiral')
-    sqlquery = 'SELECT %s FROM sim_inspiral' % ','.join(sim_inspiral_cols)
-    for ii, injVals in enumerate(connection.cursor().execute(sqlquery)):
+    # get the injections
+    injections = waveform_utils.InjectionDict()
+    injections.get_injections(connection, wFmin, calc_f_final=False, estimate_dur=True,
+        verbose=opts.verbose)
+
+    for ii, inj in enumerate(injections.as_list):
         if opts.verbose:
             print >> sys.stdout, "Injection %i\r" %(ii+1), 
             sys.stdout.flush()
 
-        # store the values as a sim_inspiral instance
-        injParams = lsctables.SimInspiral()
-        [setattr(injParams, col, val) for col,val in zip(sim_inspiral_cols, injVals)]
         # force the distance to be 1 Mpc
-        injParams.distance = 1.
-
-        # create an Injection instance
-        inj = waveform_utils.Injection(injParams)
+        inj.distance = 1.
 
         # check if f_final exists; if so calculate the sample rate to use from that
-        if injParams.f_final is not None:
-            sample_rate = int(2**(numpy.ceil(numpy.log2(injParams.f_final))+1))
+        if inj.get_f_final() is not None:
+            sample_rate = int(2**(numpy.ceil(numpy.log2(inj.get_f_final()))+1))
         else:
             sample_rate = opts.default_sample_rate
 
-        h = inj.get_waveform(sample_rate, wFmin, apply_ifo_response=False,
-            ifo=None, optimally_oriented=True, store=False)
-
-        # store the duration
-        inj.duration = h.duration
-        
         # make the segment length a power of two
-        N = int(2**numpy.ceil(numpy.log2(max(len(h), min_length*sample_rate))))
-        seg_length = N/float(sample_rate)
+        seg_length = int(2**numpy.ceil(numpy.log2(inj.get_duration())+1))
         df = 1./seg_length
+      
+        htilde = inj.get_fd_waveform(sample_rate, seg_length, None,
+            inj.geocent_end_time - seg_length/2, store=False)
 
-        # resize h
-        h.resize(N)
-        
         # get the psd and needed workspace vectors
         if opts.asd_file is not None:
             psd = workSpace.get_psd_from_file(df, wFmin, sample_rate, opts.asd_file)
@@ -126,7 +116,7 @@ for fnum, infile in enumerate(filenames):
             psd = workSpace.get_psd(df, wFmin, sample_rate, psd_model)
 
         # calculate sigma
-        sigma = filter.sigma(h, psd, oFmin)
+        sigma = filter.sigma(htilde, psd, oFmin)
 
         # get the distance limits corresponding to the desired SNR range
         min_dist = sigma / opts.max_snr
@@ -138,7 +128,15 @@ for fnum, infile in enumerate(filenames):
         
         # save to the database; in an abuse of columns, we'll store
         # sigma to eff_dist_t and the injection duration to alpha;
-        sqlquery = 'UPDATE sim_inspiral SET distance = %f, eff_dist_t = %f, alpha = %f WHERE simulation_id == "%s"' %(distance, sigma, inj.duration, inj.params.simulation_id)
+        sqlquery = '''
+            UPDATE
+                sim_inspiral
+            SET
+                distance = %f,
+                eff_dist_t = %f,
+                alpha = %f
+            WHERE simulation_id == "%s"'''
+        sqlquery = sqlquery %(distance, sigma, inj.get_duration(), inj.simulation_id)
         connection.cursor().execute(sqlquery)
         connection.commit()
 
@@ -148,7 +146,7 @@ for fnum, infile in enumerate(filenames):
 
     # save the database
     connection.close()
-    dbtables.put_connection_filename(infile, working_filename, verbose = opts.verbose)
+    dbtables.put_connection_filename(infile, working_filename, verbose=opts.verbose)
 
 if opts.verbose:
     print >> sys.stdout, "Finished!"

@@ -15,13 +15,16 @@ from glue.ligolw import dbtables
 from pylal import ligolw_sqlutils as sqlutils
 
 from pycbc import psd as pyPSD
+from pycbc.overlaps import waveform_utils
 
-def get_outfilename(output_directory, ifo, user_tag = None, num = None):
+def get_outfilename(output_directory, ifo, user_tag=None, num=None):
     tag = ''
     if user_tag is not None:
         tag = '_%s' % user_tag
     if num is not None:
         tag += '-%i' % (num)
+    if ifo is None:
+        ifo = 'RF'
     return '%s/%s-OVERLAPS%s.sqlite' %(output_directory, ifo.upper(), tag)
 
 
@@ -31,6 +34,8 @@ def get_exval_outfilename(output_directory, ifo, user_tag = None, num = None):
         tag = '_%s' % user_tag
     if num is not None:
         tag += '-%i' % (num)
+    if ifo is None:
+        ifo = 'RF'
     return '%s/%s-EXPECTATION_VALUES%s.sqlite' %(output_directory, ifo.upper(),
         tag)
 
@@ -130,51 +135,6 @@ class WorkSpace:
             if store:
                 self.fftplans[N] = fftplan 
             return fftplan
-
-#    def get_cplxplan(self, N, store = False):
-#        try:
-#            return self.cplxplans[N]
-#        except KeyError:
-#            cplxplan = qm.cplx_fft_plan_t(N, 0, 0)
-#            if store:
-#                self.cplxplans[N] = cplxplan
-#            return cplxplan
-#
-#    def get_q(self, N, store = False):
-#        try:
-#            return self.qs[N]
-#        except KeyError:
-#            q = qm.cplx_vec_t(numpy.zeros(N))
-#            if store:
-#                self.qs[N] = q
-#            return q
-#
-#    def get_q_i(self, N, store = False):
-#        try:
-#            return self.q_is[N]
-#        except KeyError:
-#            qi = qm.cplx_vec_t(numpy.zeros(N))
-#            if store:
-#                self.q_is[N] = qi 
-#            return qi
-#
-#    def get_qtilde(self, N, store = False):
-#        try:
-#            return self.qtildes[N]
-#        except KeyError:
-#            qtilde = qm.cplx_vec_t(numpy.zeros(N))
-#            if store:
-#                self.qtildes[N] = qtilde
-#            return qtilde
-#
-#    def get_qtilde_i(self, N, store = False):
-#        try:
-#            return self.qtilde_is[N]
-#        except KeyError:
-#            qtilde_i = qm.cplx_vec_t(numpy.zeros(N))
-#            if store:
-#                self.qtilde_is[N] = qtilde_i
-#            return qtilde_i
 
 
 def new_snr(snr, chisq, chisq_dof):
@@ -277,54 +237,110 @@ class ParamWindowList(segments.segmentlist):
 
 
 class OverlapResult:
-    params = ['fitting_factor', 'snr', 'chisq', 'new_snr', 'chisq_dof',
-        'event_time', 'event_time_ns', 'snr_std', 'chisq_std', 'new_snr_std',
+    params = ['ifo', 'effectualness', 'snr', 'chisq', 'new_snr', 'chisq_dof',
+        'time_offset', 'time_offset_ns', 'snr_std', 'chisq_std', 'new_snr_std',
         'num_tries', 'num_successes', 'sample_rate', 'segment_length',
         'tmplt_approximant', 'overlap_f_min', 'waveform_f_min']
-    __slots__ = params + ['event_id', 'simulation_id']
+    __slots__ = params + ['template', 'injection']
     
-    def __init__(self, event_id, simulation_id):
-        self.event_id = event_id
-        self.simulation_id = simulation_id
+    def __init__(self, template, injection):
+        self.template = template
+        self.injection = injection
         for param in self.params:
-            self.param = 0
+            setattr(self, param, None)
 
     @property
     def gps_time(self):
-        return lal.LIGOTimeGPS(self.event_time, self.event_time_ns)
+        return self.injection.detector_end_time(self.ifo) + \
+            lal.LIGOTimeGPS(self.time_offset, self.time_offset_ns)
 
     def write_to_database(self, connection, coinc_event_id):
         write_params = [param for param in self.params if param in dir(self)]
-        sqlquery = 'INSERT INTO overlap_results (coinc_event_id, %s) VALUES (?,%s)' %(
-            ', '.join(write_params), ','.join(['?' for ii in range(len(write_params))]))
-        connection.cursor().execute(sqlquery, tuple([coinc_event_id] + [getattr(self, col) for col in write_params]))
+        sqlquery = """
+            INSERT INTO
+                overlap_results (coinc_event_id, %s)""" %(
+                    ', '.join(write_params)) + """
+            VALUES
+                (?,%s)""" %(','.join(['?' for ii in range(len(write_params))]))
+
+        connection.cursor().execute(sqlquery, tuple([coinc_event_id] + \
+            [getattr(self, col) for col in write_params]))
 
     def write_all_results_to_database(self, connection):
         """
         Writes the parameters to the all_results table. Does not use a
         coinc_event_id, however.
         """
-        write_params = [param for param in self.__slots__ if param in dir(self)]
+        write_params = [param for param in self.params if param in dir(self)]+\
+            ['simulation_id', 'tmplt_id']
+        write_results = tuple([getattr(self, col) for col in self.params \
+            if param in dir(self)] + [self.injection.simulation_id,
+            self.template.tmplt_id])
         sqlquery = 'INSERT INTO all_results (%s) VALUES (%s)' %(
-            ', '.join(write_params), ','.join(['?' for ii in range(len(write_params))]))
-        connection.cursor().execute(sqlquery, tuple([getattr(self, col) for col in write_params]))
+            ', '.join(write_params),
+            ','.join(['?' for ii in range(len(write_params))]))
+        connection.cursor().execute(sqlquery, write_results)
 
 
-def get_matching_results(connection, template_apprx, wFmin, verbose = False):
+def get_injection_template_map(connection):
     """
-    Gets the injections, templates, and the map between them from
-    a database. Returns a dictionary of the injections, the templates,
-    and the results mapping them together.
+    Gets injections and templates that are mapped to each other.
+
+    Parameters
+    ----------
+    connection: sqlite3 connection
+        A connection to a SQLite database. The database must have
+        a sngl_inspiral table containing templates, a sim_inspiral
+        table containing injections, and a coinc_event_map table
+        linking the two together.
+
+    Returns
+    -------
+    template/injection map: dict
+        A dictionary keyed by the coinc_event_id of the maps.
+        Elements are a tuple of the injection's simulation_id and
+        the template's template_id.
     """
-    from pycbc.overlaps import waveform_utils
-    # FIXME: add template_approx, wFmin and oFmin to OverlapResults so
-    # don't have to pass it here
-    # get the injections
-    # get the overlap results
+    sqlquery = """
+        SELECT
+            mapA.coinc_event_id,
+            sim_inspiral.simulation_id,
+            sngl_inspiral.event_id
+        FROM
+            coinc_event_map AS mapA
+        JOIN
+            sngl_inspiral, sim_inspiral, coinc_event_map AS mapB
+        ON
+            mapA.event_id == sim_inspiral.simulation_id AND
+            mapA.coinc_event_id == mapB.coinc_event_id AND
+            mapB.event_id == sngl_inspiral.event_id
+        """
+    return dict([ [ceid, (simid, tmpltid)] for ceid, simid, tmpltid in \
+        connection.cursor().execute(sqlquery)])
+        
+
+def get_overlap_results(connection, verbose=False):
+    """
+    Gets the overlap_results, injections, and mapping templates.
+    Returns a dectionary of overlap results keyed by the coinc_event_id.
+    """
+    # get the injections and templates
+    # since the overlap f_min is stored in the overlap result,
+    # we'll just set the injections' fmin to 0
+    injections = waveform_utils.InjectionDict()
+    injections.get_injections(connection, 0, calc_f_final=False,
+        estimate_dur=False, verbose=verbose)
+    # ditto for the templates' fmin and approximant
+    templates = waveform_utils.TemplateDict()
+    templates.get_templates(connection, 0, '',
+            calc_f_final=False, estimate_dur=False, verbose=verbose,
+            only_matching=True)
     results = {}
     sqlquery = ''.join(["""
         SELECT
-            tmpltMap.event_id, injMap.event_id, overlap_results.coinc_event_id, """, ', '.join(OverlapResult.params), """
+            tmpltMap.event_id, injMap.event_id,
+            overlap_results.coinc_event_id, """,
+            ', '.join(OverlapResult.params), """
         FROM
             overlap_results
         JOIN
@@ -341,49 +357,33 @@ def get_matching_results(connection, template_apprx, wFmin, verbose = False):
     for result in connection.cursor().execute(sqlquery):
         evid, simid, ceid = result[0], result[1], result[2]
         params = [result[ii] for ii in range(3, len(result))]
-        thisResult = OverlapResult(evid, simid)
-        [setattr(thisResult, param, val) for param, val in zip(OverlapResult.params, params)]
+        thisResult = OverlapResult(templates[evid], injections[simid])
+        [setattr(thisResult, param, val) for param, val in \
+            zip(OverlapResult.params, params)]
         results[ceid] = thisResult
 
-    if verbose:
-        print >> sys.stdout, "Getting injections..."
-    sim_inspiral_cols = sqlutils.get_column_names_from_table(connection, 'sim_inspiral')
-    sqlquery = 'SELECT %s FROM sim_inspiral' % ', '.join(sim_inspiral_cols)
-    injections = {}
-    for ii, vals in enumerate(connection.cursor().execute(sqlquery)):
-        injParams = lsctables.SimInspiral()
-        [setattr(injParams, col, val) for col,val in zip(sim_inspiral_cols, vals)]
-        # create an Injection instance
-        inj = waveform_utils.Injection(injParams)
-       
-        # add to the dictionary
-        injections[str(inj.params.simulation_id)] = inj
-
-    # the templates
-    if verbose:
-        print >> sys.stdout, "Getting templates..."
-    templates = waveform_utils.TemplateDict()
-    templates.get_templates(connection, template_apprx, wFmin,
-        calc_f_final=False, estimate_dur=False, verbose=verbose,
-        only_matching = True) 
-
-    return results, injections, templates
+    return results
 
 
 def create_all_results_table(connection):
     sqlquery = ''.join(["""
-        CREATE TABLE IF NOT EXISTS all_results (""", ', '.join(OverlapResult.__slots__), """);
-        CREATE INDEX IF NOT EXISTS ar_eid_idx ON all_results (event_id);
+        CREATE TABLE IF NOT EXISTS all_results (""",
+            ', '.join(OverlapResult.__slots__+['tmplt_id', 'simulation_id']),
+            """);
+        CREATE INDEX IF NOT EXISTS ar_eid_idx ON all_results (tmplt_id);
         CREATE INDEX IF NOT EXISTS ar_sid_idx ON all_results (simulation_id);
-        CREATE INDEX IF NOT EXISTS ar_ff_idx ON all_results (fitting_factor);
+        CREATE INDEX IF NOT EXISTS ar_eff_idx ON all_results (effectualness);
         """])
     connection.cursor().executescript(sqlquery)
 
 
 def create_results_table(connection):
     sqlquery = ''.join(["""
-        CREATE TABLE IF NOT EXISTS overlap_results (coinc_event_id, """, ', '.join(OverlapResult.params), """);
-        CREATE INDEX IF NOT EXISTS or_ceid_idx ON overlap_results (coinc_event_id);
+        CREATE TABLE IF NOT EXISTS
+            overlap_results (coinc_event_id PRIMARY KEY, """,
+            ', '.join(OverlapResult.params), """);
+        CREATE INDEX IF NOT EXISTS
+            or_ceid_idx ON overlap_results (coinc_event_id);
         """])
     connection.cursor().executescript(sqlquery)
 
@@ -433,18 +433,30 @@ sqlutils.create_coinc_event_table = create_coinc_event_table
 ############################
 
 def create_log_table(connection):
-    sqlquery = "CREATE TABLE IF NOT EXISTS joblog (time, simulation_id, inj_num, event_id, tmplt_num, pickle_file, backup_archive, scratch_archive, host, username)"
+    sqlquery = """
+        CREATE TABLE IF NOT EXISTS
+            joblog (time, simulation_id, inj_num, tmplt_id, tmplt_num,
+                pickle_file, backup_archive, scratch_archive, host, username)
+        """
     connection.cursor().execute(sqlquery)
     connection.commit()
 
 
 def get_startup_data(connection):
-    sqlquery = "SELECT simulation_id, inj_num, event_id, tmplt_num, pickle_file, backup_archive, scratch_archive, host, username FROM joblog ORDER BY time DESC LIMIT 1"
+    sqlquery = """
+        SELECT
+            simulation_id, inj_num, tmplt_id, tmplt_num, pickle_file,
+            backup_archive, scratch_archive, host, username
+        FROM
+            joblog
+        ORDER BY
+            time
+        DESC LIMIT 1"""
     startup_dict = {}
-    for sim_id, inj_num, event_id, tmplt_num, pickle_file, backup_archive, scratch_arxiv, host, username in connection.cursor().execute(sqlquery):
+    for sim_id, inj_num, tmplt_id, tmplt_num, pickle_file, backup_archive, scratch_arxiv, host, username in connection.cursor().execute(sqlquery):
         startup_dict['simulation_id'] = sim_id
         startup_dict['inj_num'] = inj_num
-        startup_dict['event_id'] = event_id
+        startup_dict['tmplt_id'] = tmplt_id
         startup_dict['tmplt_num'] = tmplt_num
         startup_dict['pickle_file'] = pickle_file
         startup_dict['backup_archive'] = backup_archive
@@ -523,7 +535,7 @@ def load_backup_archive_dict(pickle_fn):
 
 def write_backup_archive(backup_dir, archive):
     if isinstance(archive, h5py.highlevel.File):
-        fd, backup_arxv_fn = tempfile.mkstemp(suffix = '.hdf5', dir = backup_dir)
+        fd, backup_arxv_fn = tempfile.mkstemp(suffix='.hdf5', dir=backup_dir)
         os.close(fd)
         arxiv_fn = archive.filename
         # close the archive to ensure clean copy
@@ -531,7 +543,8 @@ def write_backup_archive(backup_dir, archive):
         shutil.copyfile(arxiv_fn, backup_arxv_fn)
     elif isinstance(archive, dict):
         arxiv_fn = None
-        fd, backup_arxv_fn = tempfile.mkstemp(suffix = '.pickle', dir = backup_dir)
+        fd, backup_arxv_fn = tempfile.mkstemp(suffix = '.pickle',
+            dir=backup_dir)
         write_backup_archive_dict(archive, fd)
     else:
         raise ValueError, "unrecognized archive format: got %s, expected dict or h5py file" % type(archive)
@@ -539,7 +552,8 @@ def write_backup_archive(backup_dir, archive):
     return arxiv_fn, backup_arxv_fn
 
 
-def checkpoint(connection, backup_dir, archive, time_now, sim_id, inj_num, event_id, tmplt_num, username, backup_archive = False):
+def checkpoint(connection, backup_dir, archive, time_now, sim_id, inj_num,
+        tmplt_id, tmplt_num, username, backup_archive=False):
     # copy the archive over
     if backup_archive:
         arxiv_fn, backup_arxv_fn = write_backup_archive(backup_dir, archive)
@@ -558,12 +572,16 @@ def checkpoint(connection, backup_dir, archive, time_now, sim_id, inj_num, event
     if not last_bkup_arxv and not backup_archive:
         backup_arxv_fn = arxiv_fn
     # update the working file
-    sqlquery = 'INSERT INTO joblog (time, simulation_id, inj_num, event_id, tmplt_num, backup_archive, scratch_archive, host, username) VALUES (?,?,?,?,?,?,?,?,?)'
-    connection.cursor().execute(sqlquery, (time_now, sim_id, inj_num, event_id, tmplt_num, backup_arxv_fn, arxiv_fn, host, username))
+    sqlquery = '''
+        INSERT INTO
+            joblog (time, simulation_id, inj_num, tmplt_id, tmplt_num,
+                backup_archive, scratch_archive, username, host)
+        VALUES
+            (?,?,?,?,?,?,?,?,?)
+        '''
+    connection.cursor().execute(sqlquery, (time_now, sim_id, inj_num, tmplt_id,
+        tmplt_num, backup_arxv_fn, arxiv_fn, username, host))
     connection.commit()
-    #connection.close()
-    # copy to the output file
-    #shutil.copyfile(workingfile, outfile)
     # delete the last backup files
     if last_bkup_arxv is not None and backup_archive:
         os.remove(last_bkup_arxv)
@@ -638,13 +656,17 @@ def clean_backup_files(connection):#workingfile, outfile):
 
 def write_result_to_database(connection, result, match_tag, process_id):
     # get the id associated with this match tag
-    coinc_def_id = sqlutils.write_newstyle_coinc_def_entry(connection, match_tag)
+    coinc_def_id = sqlutils.write_newstyle_coinc_def_entry(connection,
+        match_tag)
     # add a new entry to the coinc_event_table
-    ceid = sqlutils.add_coinc_event_entries(connection, process_id, coinc_def_id, None, 1)[0]
+    ceid = sqlutils.add_coinc_event_entries(connection, process_id,
+        coinc_def_id, None, 1)[0]
     # add an entry in the coinc_event_table for the injection
-    sqlutils.add_coinc_event_map_entry(connection, ceid, result.simulation_id, 'sim_inspiral')
+    sqlutils.add_coinc_event_map_entry(connection, ceid,
+        result.injection.simulation_id, 'sim_inspiral')
     # add an entry for the template
-    sqlutils.add_coinc_event_map_entry(connection, ceid, result.event_id, 'sngl_inspiral')
+    sqlutils.add_coinc_event_map_entry(connection, ceid,
+        result.template.tmplt_id, 'sngl_inspiral')
     # add an entry to the overlap table
     result.write_to_database(connection, ceid)
     #connection.commit()
