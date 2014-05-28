@@ -94,7 +94,7 @@ def get_asd_file_df(asd_file):
     return f2 - f1
 
 def get_psd_models():
-    return pyPSD.get_list()
+    return pyPSD.get_lalsim_psd_list()
 
 class WorkSpace:
     def __init__(self):
