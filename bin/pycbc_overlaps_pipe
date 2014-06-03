@@ -26,6 +26,8 @@ def get_injtmpltDB_filename(output_directory, ifo, tag):
     """
     Function to return the combined injection/tmpltbank database file.
     """
+    if ifo is None:
+        ifo = 'RF'
     return '%s/%s-INJECTIONS_TMPLTBANK%s.sqlite' %( output_directory, ifo, tag.startswith('-') and tag or '_'+tag)
     
 parser = OptionParser(description = __description__, usage = '%s [options]' % __prog__)
@@ -41,8 +43,6 @@ parser.add_option('-A', '--skip-add-apprx', action='store_true', default=False, 
 
 opts, _ = parser.parse_args()
 
-if opts.ifo is None:
-    raise ValueError, "ifo required"
 if opts.start_seed is None:
     raise ValueError, "start seed required"
 seed = opts.start_seed - 1
@@ -173,13 +173,11 @@ if not opts.skip_add_apprx:
 add_opts_from_ini(cp, 'overlaps', overlaps_job)
 overlaps_job.add_opt('tmp-space', opts.node_local_dir)
 overlaps_job.add_opt('output-dir', results_dir)
-overlaps_job.add_opt('ifo', opts.ifo)
 
 # expectation values
 add_opts_from_ini(cp, 'calc_exval', exval_job)
 exval_job.add_opt('tmp-space', opts.node_local_dir)
 exval_job.add_opt('output-dir', results_dir)
-exval_job.add_opt('ifo', opts.ifo)
 
 #
 #
