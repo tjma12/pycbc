@@ -5,6 +5,7 @@ import tempfile
 import shutil
 import copy
 import warnings
+import subprocess
 import numpy
 import ConfigParser
 from optparse import OptionParser
@@ -22,6 +23,17 @@ __prog__ = 'pycbc_overlaps_pipe'
 __author__ = 'Collin Capano <collin.capano@ligo.org>'
 __description__ = 'Writes overlap dag and sub files.'
 
+#
+# Turn off those damn column name warnings about Gamma
+#
+#def StripColumnName(name):
+#    try:
+#        return ColumnPattern.search(name).group("Name")
+#    except AttributeError:
+#        return name
+#table.StripColumnName = StripColumnName
+
+
 def get_injtmpltDB_filename(output_directory, ifo, tag):
     """
     Function to return the combined injection/tmpltbank database file.
@@ -29,6 +41,30 @@ def get_injtmpltDB_filename(output_directory, ifo, tag):
     if ifo is None:
         ifo = 'RF'
     return '%s/%s-INJECTIONS_TMPLTBANK%s.sqlite' %( output_directory, ifo, tag.startswith('-') and tag or '_'+tag)
+
+
+def set_standard_params(job, jobexec, dagbasename):
+    job.add_condor_cmd('getenv', 'True')
+    job.set_stdout_file('logs/' + os.path.basename(jobexec) + \
+        '-$(cluster)-$(process).out')
+    job.set_stderr_file('logs/' + os.path.basename(jobexec) + \
+        '-$(cluster)-$(process).err')
+    job.set_sub_file('%s.%s.sub' %(os.path.basename(jobexec), dagbasename))
+
+
+def add_opts_from_ini(cp, section, job):
+    for option in cp.options(section):
+        arg = cp.get(section, option)
+        if arg == '':
+            arg = None
+        job.add_opt(option, arg)
+
+
+def construct_cmd_from_ini(cp, section, prog):
+    args = ['--%s %s' %(option, cp.get(section, option)) \
+        for option in cp.options(section)]
+    return '%s %s'%(prog, ' '.join(args))
+
     
 parser = OptionParser(description = __description__, usage = '%s [options]' % __prog__)
 
@@ -63,13 +99,17 @@ cp.read(opts.config_file)
 tempfile.tempdir = opts.log_path
 basename = '%s%s' %( 'overlaps', opts.user_tag is not None and \
     '-'+opts.user_tag or '' )
-tempfile.template = '%s.dag.log' % basename
-logfile = tempfile.mktemp()
-fh = open( logfile, 'w' )
-fh.close()
+fh, logfile = tempfile.mkstemp(suffix='%s.dag.log' %(basename))
+f = os.fdopen(fh, 'w')
+f.close()
 
 dag = pipeline.CondorDAG(logfile)
 dag.set_dag_file(basename)
+
+# redirect subprocess calls to a temp file
+tempfile.tempdir = '.'
+fh, tempout = tempfile.mkstemp(suffix='.out')
+tempoutf = os.fdopen(fh, 'w')
 
 # set up directories
 if not os.path.exists('logs/'):
@@ -89,8 +129,8 @@ if not os.path.exists('executables'):
 universe = cp.get('condor', 'universe')
 
 # get executables and set up job for each
-createInj = cp.get('condor', 'create_inj')
-combineDBs = cp.get('condor', 'combine_databases')
+create_inj_exec = cp.get('condor', 'create_inj')
+combine_dbs_exec = cp.get('condor', 'combine_databases')
 randDists = cp.get('condor', 'randomize_distances')
 if not opts.skip_add_apprx:
     addApprx = cp.get('condor', 'add_approximants')
@@ -98,20 +138,22 @@ overlaps_exec = cp.get('condor', 'overlaps')
 exval_exec = cp.get('condor', 'calc_exval')
 
 # check that the executables exist
-jobs = [createInj, combineDBs, randDists, overlaps_exec, exval_exec]
+execs = [create_inj_exec, combine_dbs_exec, randDists, overlaps_exec,
+    exval_exec]
 if not opts.skip_add_apprx:
-    jobs.append(addApprx) 
-for prog in jobs:
+    execs.append(addApprx) 
+for prog in execs:
     if not os.path.exists(prog):
         raise ValueError, 'executable %s not found' % prog
     # copy to executables directory
     shutil.copyfile(prog, 'executables/%s' %(os.path.basename(prog)))
     shutil.copymode(prog,  'executables/%s' %(os.path.basename(prog)))
 
-createInj_job = pipeline.CondorDAGJob(universe, 'executables/%s' %(
-    os.path.basename(createInj)))
-combineDBs_job = pipeline.CondorDAGJob(universe, 'executables/%s' %(
-    os.path.basename(combineDBs)))
+# point the create_inj and combine_dbs to the the copy in the executables
+# directory
+create_inj_exec = 'executables/%s' %(os.path.basename(create_inj_exec))
+combine_dbs_exec = 'executables/%s' %(os.path.basename(combine_dbs_exec))
+
 randDists_job = pipeline.CondorDAGJob(universe, 'executables/%s' %(
     os.path.basename(randDists)))
 if not opts.skip_add_apprx:
@@ -122,21 +164,12 @@ overlaps_job = pipeline.CondorDAGJob(universe, 'executables/%s' %(
 exval_job = pipeline.CondorDAGJob(universe, 'executables/%s' %(
     os.path.basename(exval_exec)))
 
-jobs = [(createInj, createInj_job), (combineDBs, combineDBs_job),
-    (randDists, randDists_job), (overlaps_exec, overlaps_job),
+jobs = [(randDists, randDists_job), (overlaps_exec, overlaps_job),
     (exval_exec, exval_job)]
 if not opts.skip_add_apprx:
     jobs.append((addApprx, addApprx_job)) 
 
 # set standard job parameters 
-def set_standard_params(job, jobexec, dagbasename):
-    job.add_condor_cmd('getenv', 'True')
-    job.set_stdout_file('logs/' + os.path.basename(jobexec) + \
-        '-$(cluster)-$(process).out')
-    job.set_stderr_file('logs/' + os.path.basename(jobexec) + \
-        '-$(cluster)-$(process).err')
-    job.set_sub_file('%s.%s.sub' %(os.path.basename(jobexec), dagbasename))
-
 for jobexec, job in jobs:
     set_standard_params(job, jobexec, basename)
 
@@ -144,21 +177,6 @@ for jobexec, job in jobs:
 #
 #   Set static options
 #
-
-def add_opts_from_ini(cp, section, job):
-    for option in cp.options(section):
-        arg = cp.get(section, option)
-        if arg == '':
-            arg = None
-        job.add_opt(option, arg)
-
-# create_inj
-add_opts_from_ini(cp, 'create_inj', createInj_job)
-createInj_job.add_opt('output-dir', injections_dir)
-
-# combine_databases
-add_opts_from_ini(cp, 'combine_databases', combineDBs_job)
-combineDBs_job.add_opt('tmp-space', opts.node_local_dir)
 
 # randomize distances
 add_opts_from_ini(cp, 'randomize_distances', randDists_job)
@@ -185,10 +203,6 @@ exval_job.add_opt('output-dir', results_dir)
 #
 #
 
-#
-#   Create the injections
-#
-
 # We will break the dag up by the desired number of injections
 # per node, with one thread for each injection set
 num_injections = int(cp.get('pipeline', 'num-injections'))
@@ -196,49 +210,77 @@ injections_per_node = int(cp.get('pipeline', 'injections-per-node'))
 num_inj_nodes = int(numpy.ceil(float(num_injections) / injections_per_node))
 remainder = num_injections % injections_per_node
 
+# create the createInj command template; this will be run once per thread
+inj_cmd = construct_cmd_from_ini(cp, 'create_inj', create_inj_exec)
+# add the desired output directory
+inj_cmd += ' --output-dir %s' % injections_dir
+# add the thread-specific arguments
+inj_cmd += ' --seed %i --n-points %i --user-tag %s' 
+
+# create the combineDBs command templates; this will be run once per thread
+dbs_cmd = construct_cmd_from_ini(cp, 'combine_databases', combine_dbs_exec) 
+# add thread-specific arguments to the dbs command
+dbs_cmd += ' --database %s %s'
+# create a database of the template bank; for each thread, we will just copy
+# this database then add the injection file
+tempfile.tempdir = '.' 
+fh, tmp_db = tempfile.mkstemp(suffix='.sqlite')
+f = os.fdopen(fh, 'w')
+f.close()
+tmp_db_cmd = dbs_cmd %(tmp_db, opts.tmpltbank_file)
+# create it
+res = subprocess.call(tmp_db_cmd.split(), stdout=tempoutf, stderr=tempoutf)
+if res != 0:
+    raise ValueError, "Call to %s failed. Command call:\n%s" %(
+        combine_dbs_exec, tmp_db_cmd)
+
+#print "Using inj. command:\n\t%s\nfor each thread" % inj_cmd
 print "Creating threads..."
 exval_nodes = []
 for nn in range(num_inj_nodes):
 
+    print "%i / %i\r" %(nn+1, num_inj_nodes),
+    sys.stdout.flush()
+
     thread_tag = '%s%i' %(opts.user_tag is not None and opts.user_tag+'-' or \
         '', nn)
 
-    # set injection node options
-    createInj_node = pipeline.CondorDAGNode(createInj_job)
+    #
+    #   Run the create_inj program to create the injections
+    #
     seed += 1
-    createInj_node.add_var_opt('seed', seed)
     this_tag = '%i%s%s' %( seed, opts.user_tag is None and '-' or '_',
         thread_tag)
-    createInj_node.add_var_opt('user-tag', this_tag)
     # if the last thread, set the number of injections to be the remainder
     if remainder != 0 and nn == num_inj_nodes-1:
-        createInj_node.add_var_opt('n-points', remainder)
+        n_points = remainder
     else:
-        createInj_node.add_var_opt('n-points', injections_per_node)
+        n_points = injections_per_node
 
-    outfile = create_injections.get_outfilename(injections_dir, 'HL',
-        user_tag = this_tag,
-        gz = True)
-    createInj_node.add_output_file(outfile)
-    createInj_node.set_category('create_inj')
-    dag.add_node(createInj_node)
+    this_cmd = inj_cmd %(seed, n_points, this_tag)
+    res = subprocess.call(this_cmd.split(), stdout=tempoutf, stderr=tempoutf)
+    if res != 0:
+        raise ValueError, "Call to %s failed. Command call:\n%s" %(
+            create_inj_exec, this_cmd)
+
+    inj_outfile = create_injections.get_outfilename(injections_dir, 'HL',
+        user_tag=this_tag, gz=True)
 
     #
-    #   Create node to add bank, injections into a database
+    #   Create a database with the injections and the templates
     #
-    combineDBs_node = pipeline.CondorDAGNode(combineDBs_job)
-    # input injection xml file
-    combineDBs_node.add_file_arg(createInj_node.get_output_files()[0])
-    # input the tmpltbank xml file
-    combineDBs_node.add_file_arg(opts.tmpltbank_file)
-    # the output file
-    outfile = get_injtmpltDB_filename(inputdbs_dir, opts.ifo, thread_tag)
-    combineDBs_node.add_var_opt('database', outfile) 
-    combineDBs_node.add_output_file(outfile)
-    # parent
-    combineDBs_node.add_parent(createInj_node)
-    combineDBs_node.set_category('combine_databases')
-    dag.add_node(combineDBs_node)
+    db_outfile = get_injtmpltDB_filename(inputdbs_dir, opts.ifo, thread_tag)
+    # copy the temp database containing the template bank to the right name
+    shutil.copyfile(tmp_db, db_outfile)
+    shutil.copymode(tmp_db, db_outfile)
+
+    # the order of arguments fed to the dbs_cmd argument is output database,
+    # injection file (see above)
+    this_cmd = dbs_cmd %(db_outfile, inj_outfile)
+    res = subprocess.call(this_cmd.split(), stdout=tempoutf, stderr=tempoutf)
+    if res != 0:
+        raise ValueError, "Call to %s failed. Command call:\n%s" %(
+            combine_dbs_exec, this_cmd)
 
     #
     #   Create node to randomize the distances
@@ -247,9 +289,8 @@ for nn in range(num_inj_nodes):
     seed += 1
     randDists_node.add_var_opt('seed', seed)
     #randDists_node.add_var_opt('user-tag', thread_tag)
-    randDists_node.add_file_arg(combineDBs_node.get_output_files()[0])
-    randDists_node.add_output_file(combineDBs_node.get_output_files()[0])
-    randDists_node.add_parent(combineDBs_node)
+    randDists_node.add_file_arg(db_outfile)
+    randDists_node.add_output_file(db_outfile)
     randDists_node.set_category('randomize_distance')
     dag.add_node(randDists_node)
 
@@ -310,7 +351,8 @@ for nn in range(num_inj_nodes):
     exval_node.set_category('calc_exval')
     dag.add_node(exval_node)
     exval_nodes.append(exval_node)
-     
+print ""
+
 #
 #   Create a cache of all output files
 #
@@ -349,6 +391,11 @@ if cp.has_option('pipeline', 'max-other-jobs'):
 
 dag.write_sub_files()
 dag.write_dag()
+
+# remove the temporary files
+os.remove(tmp_db)
+tempoutf.close()
+os.remove(tempout)
 
 print "Finished!"
 
