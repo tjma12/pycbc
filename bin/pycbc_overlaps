@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/python
 
 __prog__ = 'ccapps_overlaps'
 __author__ = 'Collin Capano <collin.capano@ligo.org>'
@@ -325,23 +325,28 @@ for fnum, infile in enumerate(filenames):
                 sample_rate = int(2**(numpy.ceil(numpy.log2(
                     max(tmplt.get_f_final(), inj.get_f_final()))+1)))
 
-                # for TD waveforms, if the sample rate isn't the same as the
-                # last, have to regenerate the template
-                if lalsim.SimInspiralImplementedTDApproximants(
-                        lalsim.GetApproximantFromString(tmplt.approximant)) \
-                        and (sample_rate != last_tmplt_rate or not h):
-                    h = tmplt.get_td_waveform(sample_rate,
-                            tmplt.get_duration(), store=False)
-
                 # get the segment length to use
                 # we'll set the segment length to be twice the max duration
                 # of this template and the injection
                 seg_length = int(2**(numpy.ceil(numpy.log2(
                     max(tmplt.get_duration(), inj.get_duration())))+1))
 
+                # since the duration estimates are based on the 2PN
+                # approximation, the duration may be too short; we'll just put
+                # a floor at 2s
+                if seg_length < 2:
+                    seg_length = 2
+
+                # for TD waveforms, if the sample rate isn't the same as the
+                # last, have to regenerate the template
+                if lalsim.SimInspiralImplementedTDApproximants(
+                        lalsim.GetApproximantFromString(tmplt.approximant)) \
+                        and (sample_rate != last_tmplt_rate or not h):
+                    h = tmplt.get_td_waveform(sample_rate,
+                            seg_length, store=False)
+
             N = seg_length * sample_rate
             df = 1./seg_length
-
 
             # if the duration isn't the same as the last used, have to
             # regenerate the FD form of the template, and get the correct
@@ -358,10 +363,7 @@ for fnum, infile in enumerate(filenames):
 
                 if opts.vary_n and lalsim.SimInspiralImplementedTDApproximants(
                         lalsim.GetApproximantFromString(tmplt.approximant)):
-                    # zero-pad the template and transform
-                    tmph = waveform_utils.position_td_template(h, N)
                     htilde = filter.make_frequency_series(h)
-                    del tmph
                 else:
                     htilde = tmplt.get_fd_waveform(sample_rate, seg_length,
                         store=False)
@@ -408,6 +410,7 @@ for fnum, infile in enumerate(filenames):
             htildeprime = inj.get_fd_waveform(sample_rate, seg_length,
                 ifo, segment_start, store=opts.use_injection_cache is not None)
 
+            print len(htildeprime), htildeprime.delta_f, len(htilde), htilde.delta_f
             # compute fitting factor
             # Note that because we padded the segment length to be twice the
             # length of htildeprime and htilde, we do not need to worry

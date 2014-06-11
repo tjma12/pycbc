@@ -68,7 +68,7 @@ def position_td_template(h, N):
     h: pycbc TimeSeries
         The waveform time series to re-position.
     N: int
-        The length of the segment.
+        The number of points in the segment.
 
     Returns
     -------
@@ -834,10 +834,11 @@ class Template(Waveform):
     # we add a tmplt_id for indexing
     __slots__ = Waveform.__slots__ + ['tmplt_id']
 
-    def get_td_waveform(self, sample_rate, segment_length, store=False):
+    def get_td_waveform(self, sample_rate, segment_length, store=False,
+        reposition=True):
         """
-        Modifies Waveform's get_td_waveform such that only hplus is used,
-        and such that the template is placed so that the peak is
+        Modifies Waveform's get_td_waveform such that only hplus is used.
+        Will also optionally reposition the template such that the peak is
         at the end of the segment.
         """
         try:
@@ -852,7 +853,8 @@ class Template(Waveform):
             h, _ = super(Template, self).get_td_waveform(sample_rate,
                 store=False)
             # reposition
-            h = position_td_template(h, segment_length)
+            if reposition:
+                h = position_td_template(h, segment_length*sample_rate)
             if store:
                 self.store_waveform(h, sample_rate, segment_length)
         return h

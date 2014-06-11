@@ -63,11 +63,6 @@ workSpace = overlap_utils.WorkSpace()
 # get the psd model to use
 if opts.asd_file is None:
     psd_model = opts.psd_model
-    min_length = 0
-# if using an asd file, the df must be greater than what's in the file
-else:
-    min_length = 1. / overlap_utils.get_asd_file_df(opts.asd_file)
-    
 
 for fnum, infile in enumerate(filenames):
     if opts.verbose:
@@ -104,6 +99,10 @@ for fnum, infile in enumerate(filenames):
 
         # make the segment length a power of two
         seg_length = int(2**numpy.ceil(numpy.log2(inj.get_duration())+1))
+        # since the duration estimate is based on the 2PN approximation,
+        # the duration may be too short; we'll just put a floor at 2s
+        if seg_length < 2:
+            seg_length = 2
         df = 1./seg_length
       
         htilde = inj.get_fd_waveform(sample_rate, seg_length, None,
