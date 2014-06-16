@@ -45,6 +45,9 @@ parser.add_option("", "--rand-inclination", action = "store_true", default = Fal
 parser.add_option("", "--rand-init-phase", action = "store_true", default = False, help = "Randomize the initial phase angle. Phase angles will be chosen uniformly from [0, 2pi]. If not turned on, initial phase will be set to 0.")
 parser.add_option("", "--rand-polarization", action = "store_true", default = False, help = "Randomize the polarization angle. Polarization angles will be chosen uniformly from [0, 2pi]. If not turned on, the polarization will be set to 0.")
 parser.add_option("-a", "--approximant", help = "Approximant to use to generate the waveforms.")
+parser.add_option("", "--amp-order", type=int, default=7, help="Amplitude order to use for injections. Default is 7 (3.5PN).")
+parser.add_option("", "--phase-order", type=int, default=7, help="Phase order to use for injections. Default is 7 (3.5PN).")
+parser.add_option("", "--spin-order", type=int, default=None, help="Spin order to use for injections.")
 parser.add_option("-T", "--taper", help = "Set whether or not to taper the waveforms at the start and/or end. Options are: start, end, start_end. If not specified, no tapering will be done.")
 parser.add_option('', '--seed', type = 'int', default = int((time.time()*100)% 1e6), help = 'Set the seed to use for the random number generator. If none specified, will use the current time.')
 parser.add_option("-n", "--n-points", type = "int", help = "Number of injections to create")
@@ -225,7 +228,10 @@ for n in range(opts.n_points):
     # set waveform properties
     thisInj.waveform = opts.approximant
     thisInj.taper = taper 
-    thisInj.amp_order = 0
+    thisInj.amp_order = opts.amp_order
+    # FIXME: using numrel_mode_min and max for phase, spin orders
+    thisInj.numrel_mode_min = opts.phase_order
+    thisInj.numrel_mode_max = opts.spin_order
 
     # get ffinal
     # FIXME: Putting in try/except because not all approximants are supported

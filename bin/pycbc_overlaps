@@ -42,6 +42,10 @@ parser.add_option('-i', '--ifo', help = "What ifo to inject into. If none specif
 parser.add_option('-U', '--user-tag', help = "User tag to add to all Overlap files.")
 parser.add_option('-M', '--use-injection-cache', metavar = '"memory" or "disk"', help = "Speed up calculations by using an injection cache. Options are 'memory' or 'disk'. If 'memory', all injections will be stored in memory. If 'disk', injections will be stored to a temporary h5py archive. If a temp-space is specified, this temporary archive will be placed there; otherwise, it will be created in the current working directory.")
 parser.add_option('-a', '--approximant', help = "Approximant to use for the templates.")
+parser.add_option("", "--amp-order", type=int, default=0, help="Amplitude order to use for templates. Default is 0.")
+parser.add_option("", "--phase-order", type=int, default=7, help="Phase order to use for templates. Default is 7 (3.5PN).")
+parser.add_option("", "--spin-order", type=int, default=None, help="Spin order to use for templates.")
+parser.add_option("", "--taper", help = "For TD approximants, set whether or not to taper the templates at the start and/or end. Options are: start, end, start_end. If not specified, no tapering will be done.")
 parser.add_option('', '--match-window-db', help = 'Use the match windows specified in the given database to reduce the number of overlaps computed.')
 parser.add_option('', '--save-all-overlaps', action = 'store_true', default = False, help = 'Do not delete the all_overlaps table from the output database before exiting. This table contains the fitting factors for all the injections and templates that were filtered.')
 parser.add_option('-R', '--replace', action = 'store_true', default = False, help = 'If the output database already exists, overwrite it. Default action is not to overwrite, in which case only injections that do not have overlap values calculated in the database will be analyzed.')
@@ -80,6 +84,7 @@ if (opts.use_injection_cache is not None and not
         opts.use_injection_cache == 'memory')):
     raise ValueError('if using injection cache, --use-injection-cache must ' +\
         'be set to "disk" or "memory"')
+taper = waveform_utils.get_taper_string(opts.taper)
 
 # load the param window list
 param_windows = {}
@@ -234,6 +239,8 @@ for fnum, infile in enumerate(filenames):
     # get the templates
     templates = waveform_utils.TemplateDict()
     templates.get_templates(connection, opts.approximant, wfmin,
+        amp_order=opts.amp_order, phase_order=opts.phase_order,
+        spin_order=opts.spin_order, taper=taper,
         calc_f_final=True, estimate_dur=True, verbose=opts.verbose,
         only_matching=False)
     if opts.verbose:

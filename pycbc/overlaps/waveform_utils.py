@@ -732,8 +732,14 @@ class Waveform(object):
             if store and (self._archive is None or self._archive_id is None):
                 raise ValueError, "In order to store the waveform, an "+\
                     "archive and archive_id must be set."
-            #TD waveforms
             approximant = lalsim.GetApproximantFromString(str(self.approximant))
+            # check if we need to adjust the spin order
+            if self.spin_order is not None:
+                wflags = lalsim.SimInspiralCreateWaveformFlags()
+                lalsim.SimInspiralSetSpinOrder(wflags, self.spin_order)
+            else:
+                wflags = None
+            #TD waveforms
             if lalsim.SimInspiralImplementedTDApproximants(approximant):
                 hplus, hcross = lalsim.SimInspiralChooseTDWaveform(
                     self.phi0, 1./sample_rate,
@@ -741,7 +747,7 @@ class Waveform(object):
                     self.spin1x, self.spin1y, self.spin1z, self.spin2x,
                     self.spin2y, self.spin2z, self.f_min, self.f_ref,
                     self.distance * 1e6 * lal.LAL_PC_SI, self.inclination,
-                    self.lambda1, self.lambda2, None, None,
+                    self.lambda1, self.lambda2, wflags, None,
                     self.amp_order, self.phase_order,
                     approximant)
 
@@ -799,13 +805,18 @@ class Waveform(object):
 
             else:
                 # FD waveform, get directly
+                if self.spin_order is not None:
+                        wflags = lalsim.SimInspiralCreateWaveformFlags()
+                        lalsim.SimInspiralSetSpinOrder(wflags, self.spin_order)
+                else:
+                    wflags = None
                 htilde, htilde_cross = lalsim.SimInspiralChooseFDWaveform(
                     self.phi0, 1./segment_length,
                     self.mass1 * lal.LAL_MSUN_SI, self.mass2*lal.LAL_MSUN_SI,
                     self.spin1x, self.spin1y, self.spin1z, self.spin2x,
                     self.spin2y, self.spin2z, self.f_min, self.f_max,
                     self.distance * 1e6 * lal.LAL_PC_SI, self.inclination,
-                    self.lambda1, self.lambda2, None, None,
+                    self.lambda1, self.lambda2, wflags, None,
                     self.amp_order, self.phase_order,
                     approximant)
 
@@ -896,7 +907,8 @@ class TemplateDict(dict):
     def __init__(self):
         self._sort_key = None
 
-    def get_templates(self, connection, approximant, f_min, archive={},
+    def get_templates(self, connection, approximant, f_min, amp_order=None,
+            phase_order=None, spin_order=None, taper=None, archive={},
             calc_f_final=True, estimate_dur=True, verbose=False,
             only_matching=False):
         if verbose:
@@ -919,7 +931,9 @@ class TemplateDict(dict):
             # convert event_id to tmplt_id
             tmplt_id = args.pop('sngl_inspiral.event_id')
             args['tmplt_id'] = tmplt_id
-            tmplt = Template(approximant=approximant, f_min=f_min, **args)
+            tmplt = Template(approximant=approximant, f_min=f_min,
+                amp_order=amp_order, phase_order=phase_order,
+                spin_order=spin_order, taper=taper, **args)
             if calc_f_final:
                 tmplt.set_f_final()
             if estimate_dur:
@@ -1255,8 +1269,11 @@ class InjectionDict(dict):
         'taper': 'taper',
         'waveform': 'approximant',
         'simulation_id': 'simulation_id',
+        # FIXME: fix these kludges when new tables are used 
         'eff_dist_t': 'sigma',
-        'alpha': 'duration'
+        'alpha': 'duration',
+        'numrel_mode_min': 'phase_order',
+        'numrel_mode_max': 'spin_order'
     }
 
     def __init__(self):
