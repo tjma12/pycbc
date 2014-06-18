@@ -96,7 +96,7 @@ if opts.match_window_db is not None:
         FROM
             match_windows
         WHERE
-            tmplt_apprx == ?'
+            tmplt_apprx == ?
         '''
     apprxs = [apprx[0] for apprx in connection.cursor().execute(sqlquery,
         (opts.approximant,))]
@@ -417,7 +417,6 @@ for fnum, infile in enumerate(filenames):
             htildeprime = inj.get_fd_waveform(sample_rate, seg_length,
                 ifo, segment_start, store=opts.use_injection_cache is not None)
 
-            print len(htildeprime), htildeprime.delta_f, len(htilde), htilde.delta_f
             # compute fitting factor
             # Note that because we padded the segment length to be twice the
             # length of htildeprime and htilde, we do not need to worry
