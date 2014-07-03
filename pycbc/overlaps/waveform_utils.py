@@ -806,8 +806,8 @@ class Waveform(object):
             else:
                 # FD waveform, get directly
                 if self.spin_order is not None:
-                        wflags = lalsim.SimInspiralCreateWaveformFlags()
-                        lalsim.SimInspiralSetSpinOrder(wflags, self.spin_order)
+                    wflags = lalsim.SimInspiralCreateWaveformFlags()
+                    lalsim.SimInspiralSetSpinOrder(wflags, self.spin_order)
                 else:
                     wflags = None
                 htilde, htilde_cross = lalsim.SimInspiralChooseFDWaveform(
