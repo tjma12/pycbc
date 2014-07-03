@@ -18,7 +18,7 @@ class Result:
         self.dist = None
         self.inclination = None
         self.target_snr = None
-        self.fitting_factor = None
+        self.effectualness = None
         self.snr = None
         self.snr_std = None
         self.chisq = None
@@ -77,7 +77,7 @@ def parse_results_cache(cache_file):
 def get_injection_results(filenames, get_inj_map = True, ref_apprx = None, test_apprx = None, verbose=False):
     if get_inj_map and (test_apprx is None or ref_apprx is None):
         raise ValueError, "If want an inj_map, must provide a reference and test approximate"
-    sqlquery = 'select sim.waveform, sim.simulation_id, sim.mass1, sim.mass2, sim.spin1z, sim.spin2z, sim.eff_dist_h, sim.distance, sim.inclination, sim.eff_dist_t, tmplt.event_id, tmplt.mass1, tmplt.mass2, res.fitting_factor, res.snr, res.snr_std, res.chisq, res.chisq_std, res.chisq_dof, res.new_snr, res.new_snr_std, res.num_successes, res.sample_rate, res.coinc_event_id from overlap_results as res join sim_inspiral as sim, coinc_event_map as map on sim.simulation_id == map.event_id and map.coinc_event_id == res.coinc_event_id join sngl_inspiral as tmplt, coinc_event_map as mapB on mapB.coinc_event_id == map.coinc_event_id and mapB.event_id == tmplt.event_id'
+    sqlquery = 'select sim.waveform, sim.simulation_id, sim.mass1, sim.mass2, sim.spin1z, sim.spin2z, sim.eff_dist_h, sim.distance, sim.inclination, sim.eff_dist_t, tmplt.event_id, tmplt.mass1, tmplt.mass2, res.effectualness, res.snr, res.snr_std, res.chisq, res.chisq_std, res.chisq_dof, res.new_snr, res.new_snr_std, res.num_successes, res.sample_rate, res.coinc_event_id from overlap_results as res join sim_inspiral as sim, coinc_event_map as map on sim.simulation_id == map.event_id and map.coinc_event_id == res.coinc_event_id join sngl_inspiral as tmplt, coinc_event_map as mapB on mapB.coinc_event_id == map.coinc_event_id and mapB.event_id == tmplt.event_id'
     results = {}
     reftest_map = {}
     idx = 0
@@ -109,7 +109,7 @@ def get_injection_results(filenames, get_inj_map = True, ref_apprx = None, test_
                 thisRes.tmplt_id = tmplt_evid
                 thisRes.tmplt_m1 = tmplt_m1
                 thisRes.tmplt_m2 = tmplt_m2
-                thisRes.fitting_factor = ff
+                thisRes.effectualness = ff
                 thisRes.snr = snr
                 thisRes.snr_std = snr_std
                 thisRes.chisq = chisq

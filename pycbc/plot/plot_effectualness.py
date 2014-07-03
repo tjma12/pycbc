@@ -37,7 +37,7 @@ def plot_effectualness(results, xarg, xlabel, yarg, ylabel,
     # get x-values
     xvals = [plot_utils.get_arg(res, xarg) for res in results] 
     yvals = [plot_utils.get_arg(res, yarg) for res in results]
-    zvals = [res.fitting_factor for res in results]
+    zvals = [res.effectualness for res in results]
     plot_data['data'] = (xvals, yvals, zvals)
     sc = ax.scatter(xvals, yvals, edgecolors='none', c=zvals, s=ptsize,
         vmin=zmin, vmax=zmax, zorder=1, cmap=cmap)
@@ -110,7 +110,7 @@ def plot_effectualness_cumhist(results, tmplt_label='', inj_label='',
         range = (xmin, xmax)
     else:
         range = None
-    cnt, bins, _ = ax.hist([x.fitting_factor for x in results], bins=nbins,
+    cnt, bins, _ = ax.hist([x.effectualness for x in results], bins=nbins,
         range=range, normed=True, cumulative=True, log=logy, zorder=1)
     plot_data['bins'] = bins
     plot_data['count'] = cnt
@@ -150,7 +150,7 @@ def plotffcumhist(results, xarg, xlabel, target_mismatch = 0.97, xmin = None, xm
         range = (xmin, xmax)
     else:
         range = None
-    plotvals = sorted([(plot_utils.get_arg(res, xarg), res.fitting_factor) for res in results])
+    plotvals = sorted([(plot_utils.get_arg(res, xarg), res.effectualness) for res in results])
     yvals = []
     ffs = []
     for _, ff in plotvals:
@@ -192,7 +192,7 @@ def plotffbinnedhist(results, xarg, xlabel, target_mismatch = 0.97, nbins = 50, 
         range = (xmin, xmax)
     else:
         range = None
-    plotvals = sorted([(plot_utils.get_arg(res, xarg), res.fitting_factor) for res in results])
+    plotvals = sorted([(plot_utils.get_arg(res, xarg), res.effectualness) for res in results])
     xvals = [x for x, _ in plotvals]
     ffs = [ff for _, ff in plotvals]
     xbins = numpy.linspace(plotvals[0][0], plotvals[-1][0], num = nbins+1)

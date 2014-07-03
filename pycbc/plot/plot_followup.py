@@ -231,7 +231,7 @@ def plot_param_bias(injected_values, recovered_values, param_arg, param_label,
 def plot_recovered_injected(injected_values, recovered_values, param_label,
     param_windows=None, pwin_missed_indices=None, xmin=None, xmax=None,
     ymin=None, ymax=None, plot_zoom=False, zoom_xlims=None, zoom_ylims=None,
-    point_size=None, effectualness=[]):
+    point_size=3, effectualness=[]):
     """
     Plots recovered vs injected of given parameter.
 
@@ -267,12 +267,12 @@ def plot_recovered_injected(injected_values, recovered_values, param_label,
     if param_windows is not None:
         if pwin_missed_indices:
             pwin_missed_indices = numpy.array(pwin_missed_indices)
-            ax.scatter(injected_values[(pwin_missed_indices,)],
-                recovered_values[(pwin_missed_indices,)],
+            ax.scatter(injected_values[pwin_missed_indices],
+                recovered_values[pwin_missed_indices],
                 edgecolors='r', marker='x', s=30, zorder=2)
             if plot_zoom:
-                ax2.scatter(injected_values[(pwin_missed_indices,)],
-                    recovered_values[(pwin_missed_indices,)],
+                ax2.scatter(injected_values[pwin_missed_indices],
+                    recovered_values[pwin_missed_indices],
                     edgecolors='r', marker='x', s=30, zorder=2)
 
         # plot the windows

@@ -22,7 +22,7 @@ parser.add_option('--zoom-ylims', metavar='ymin,ymax', help = 'Y-limits for zoom
 parser.add_option('--param-window-db', help='Optional. Plot the parameter window in the given database. One of the parameters listed in the database must be the same as param-name.')
 parser.add_option('--plot-effectualness', action='store_true', default=False, help='Optional. Color points by their effectualness.')
 parser.add_option('-D', '--dpi', type = 'int', default = 300, help = 'dpi to use for plots')
-parser.add_option('-S', '--point-size', type = 'int', help='point size to use for markers')
+parser.add_option('-S', '--point-size', type = 'int', default=3, help='point size to use for markers; default is 3.')
 parser.add_option('-A', '--x-min', type = 'float', help = 'min x for plot')
 parser.add_option('-B', '--x-max', type = 'float', help = 'max x for plot')
 parser.add_option('-U', '--y-min', type = 'float', help = 'min y for plot')
@@ -60,7 +60,7 @@ sqlquery = """
 SELECT
     inj.waveform, inj.mass1, inj.mass2, inj.spin1z, inj.spin2z, tmplt.mass1,
     tmplt.mass2, tmplt.spin1z, tmplt.spin2z, res.tmplt_approximant,
-    res.fitting_factor
+    res.effectualness
 FROM
     sim_inspiral AS inj
 JOIN
@@ -101,7 +101,7 @@ for ii,filename in enumerate(filenames):
             inj.s1z = inj_s1z
             inj.s2z = inj_s2z
             inj.apprx = waveform
-            inj.fitting_factor = ff
+            inj.effectualness = ff
             if apply_cut and not plot_utils.result_in_range(inj, apply_cut):
                 continue
             tmplt = plot_utils.Result()
@@ -116,7 +116,7 @@ for ii,filename in enumerate(filenames):
             recovered_vals[waveform, tmplt_apprx].append(tmplt)
         connection.close()
     except sqlite3.OperationalError:
-        connction.close()
+        connection.close()
         continue
 print ""
 print "getting templates"
@@ -134,7 +134,7 @@ for (inj_apprx, tmplt_apprx) in injected_vals:
         for tmplt in recovered_vals[inj_apprx, tmplt_apprx]])
 
     if opts.plot_effectualness:
-        effectualness = [inj.fitting_factor for inj in \
+        effectualness = [inj.effectualness for inj in \
             injected_vals[inj_apprx, tmplt_apprx]]
     else:
         effectualness = []
