@@ -158,7 +158,7 @@ for fnum, infile in enumerate(filenames):
     inj_tmplt_map = overlap_utils.get_injection_template_map(connection)
     injections = waveform_utils.InjectionDict()
     injections.get_injections(connection, wfmin, archive=archive,
-        calc_f_final=opts.vary_n, estimate_dur=opts.vary_n,
+        calc_f_final=opts.vary_n, estimate_dur=True,
         verbose=opts.verbose)
     templates = waveform_utils.TemplateDict()
     templates.get_templates(connection, opts.approximant, wfmin,
