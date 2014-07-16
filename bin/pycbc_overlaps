@@ -24,6 +24,7 @@ from glue.ligolw.utils import process
 from pylal import ligolw_sqlutils as sqlutils
 
 from pycbc import filter
+from pycbc import types as pytypes
 
 from pycbc.overlaps import waveform_utils
 from pycbc.overlaps import overlap_utils
@@ -35,7 +36,7 @@ parser.add_option("-p", "--psd-model", help = "What PSD model to use for overlap
 parser.add_option("-A", "--asd-file", help = "Load the PSD from a dat file containing an ASD. If both this and psd-model specified, this will take precedence.")
 parser.add_option('-f', '--waveform-f-min', type = 'float', help = "Frequency at which to start the waveform generation (in Hz).")
 parser.add_option('-F', '--overlap-f-min', type = 'float', help = "Frequency at which to start the overlap (in Hz). Note: This must be larger than waveform-f-min.")
-parser.add_option('-r', '--sample-rate', type = 'int', help = "Sample rate to use (in Hz). Must be a power of 2. Required if vary-n not used.")
+parser.add_option('-r', '--sample-rate', type = 'int', help = "Required. Sample rate to use (in Hz). Must be a power of 2. If vary-n is turned on and the sample rate used to generate the waveforms and compute overlaps is less than this, the effectulaness time series will be upsampled to this sample rate. If the sample rate used in the overlap calculation is greater than this, that sample rate will be used.")
 parser.add_option('-l', '--segment-length', type = 'int', help = "Segment length to use (in s). Must be a power of 2. Required if vary-n not used.")
 parser.add_option('-n', '--vary-n', action='store_true', default=False, help='If turned on, the sample rate and segment length used will be set to the smallest possible value between a given template and injection. This speeds up overlap calculations, but may reduce the accuracy of the effectualness measurement.')
 parser.add_option('-i', '--ifo', help = "What ifo to inject into. If none specified, no response function will be applied to the injections.")
@@ -64,10 +65,15 @@ wfmin = opts.waveform_f_min
 ofmin = opts.overlap_f_min
 if ofmin < wfmin:
     raise ValueError("--waveform-f-min must be less than overlap-f-min")
+
+if opts.sample_rate is None:
+    raise ValueError("must specify a sample-rate")
+target_sample_rate = opts.sample_rate
+if numpy.log2(target_sample_rate) % 1 != 0.:
+    raise ValueError("--sample-rate must be a power of 2")
+
 if not opts.vary_n:
-    if opts.sample_rate is None:
-        raise ValueError("if not --vary-n, must specify a sample-rate")
-    sample_rate = opts.sample_rate
+    sample_rate = target_sample_rate
     if sample_rate is None or numpy.log2(sample_rate) % 1 != 0.:
         raise ValueError("--sample-rate must be a power of 2")
     if opts.segment_length is None:
@@ -75,6 +81,7 @@ if not opts.vary_n:
     seg_length = opts.segment_length
     if seg_length is None or numpy.log2(seg_length) % 1 != 0.:
         raise ValueError("--segment-length must be a power of 2")
+
 if opts.asd_file is None and opts.psd_model is None:
     raise ValueError("must specify --asd-file or --psd-model")
 if opts.asd_file is not None and not os.path.exists(opts.asd_file):
@@ -243,6 +250,7 @@ for fnum, infile in enumerate(filenames):
         spin_order=opts.spin_order, taper=taper,
         calc_f_final=True, estimate_dur=True, verbose=opts.verbose,
         only_matching=False)
+    templates.clear_sigmas()
     if opts.verbose:
         print >> sys.stdout, "Database contains %i templates" %(
             len(templates.keys()))
@@ -265,6 +273,7 @@ for fnum, infile in enumerate(filenames):
     injections.get_injections(connection, wfmin, archive=archive,
         calc_f_final=opts.vary_n, estimate_dur=opts.vary_n,
         verbose=opts.verbose)
+    injections.clear_sigmas()
     # if vary n, set sort key
     if opts.vary_n:
         injections.set_sort_key(['_f_final', '_duration'])
@@ -416,15 +425,33 @@ for fnum, infile in enumerate(filenames):
             # doesn't exist in the archive
             htildeprime = inj.get_fd_waveform(sample_rate, seg_length,
                 ifo, segment_start, store=opts.use_injection_cache is not None)
+            
+            # get the normalization of htilde, htildeprime if they aren't known yet
+            if inj.sigma is None:
+                inj.sigma = filter.sigma(htildeprime, psd, ofmin)
+            if tmplt.sigma is None:
+                tmplt.sigma = filter.sigma(htilde, psd, ofmin)
 
-            # compute fitting factor
+            # get work vectors
+            out_work_mem = workSpace.get_out_vec(N,
+                pytypes.complex_same_precision_as(htilde))
+            corr_work_mem = workSpace.get_corr_vec(N,
+                pytypes.complex_same_precision_as(htilde))
+
+            # compute effectualness
             # Note that because we padded the segment length to be twice the
             # length of htildeprime and htilde, we do not need to worry
             # about corruption
-            effectualness, maxidx = filter.match(htildeprime, htilde, psd=psd,
-                low_frequency_cutoff = ofmin)
-            time_offset = segment_start + maxidx / float(sample_rate) - \
+            cmplx_ts, _, norm, maxidx, offset, _ = overlap_utils.filter_by_resampling(
+                htilde, htildeprime, psd, ofmin, target_sample_rate,
+                max_resample_length=2, h_norm=tmplt.sigma**2, out=out_work_mem,
+                corr_out=corr_work_mem)
+
+            effectualness = abs(cmplx_ts[maxidx]*norm)/inj.sigma
+
+            time_offset = segment_start + maxidx*cmplx_ts.delta_t + offset - \
                 inj.geocent_time
+
             # store
             thisResult = overlap_utils.OverlapResult(tmplt, inj)
             thisResult.segment_length = seg_length

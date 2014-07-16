@@ -1,4 +1,4 @@
-#! /usr/bin/env python
+#!/usr/bin/env python
 
 __prog__ = 'pycbc_calc_exval'
 __author__ = 'Collin Capano <collin.capano@ligo.org>'
@@ -29,11 +29,11 @@ from glue.ligolw.utils import process
 from pylal import ligolw_sqlutils as sqlutils
 
 from pycbc import types as pytypes
-from pycbc.types import complex_same_precision_as
 from pycbc import filter
 from pycbc import noise
 from pycbc import vetoes
 from pycbc.overlaps import waveform_utils, overlap_utils
+
 
 parser = OptionParser(description = __description__)
 parser.add_option('-o', '--output-dir', default = '.', help = 'Directory to save overlap output data. Default is current.')
@@ -42,9 +42,9 @@ parser.add_option("-p", "--psd-model", help = "What PSD model to use for overlap
 parser.add_option("-A", "--asd-file", help = "Load the PSD from a dat file containing an ASD. If both this and psd-model specified, this will take precedence.")
 parser.add_option('-f', '--waveform-f-min', type = 'float', help = "Frequency at which to start the waveform generation (in Hz).")
 parser.add_option('-F', '--overlap-f-min', type = 'float', help = "Frequency at which to start the overlap (in Hz). Note: This must be larger than waveform-f-min.")
-parser.add_option('-r', '--sample-rate', type = 'int', help = "Sample rate to use (in Hz). Must be a power of 2. Required if vary-n not used.")
+parser.add_option('-r', '--sample-rate', type = 'int', help = "Required. Sample rate to use (in Hz). Must be a power of 2. If vary-n is turned on and the sample rate used to generate the waveforms and is less than this, the effectulaness, snr, and chisq will be found by zero-padding the frequency-domain such that the time series will have this sample rate. If the sample rate used in the waveform generation is greater than this, that sample rate will be used.")
 parser.add_option('-l', '--segment-length', type = 'int', help = "Segment length to use (in s). Must be a power of 2. Required if vary-n not used.")
-parser.add_option('-N', '--vary-n', action='store_true', default=False, help='If turned on, the sample rate and segment length used will be set to the smallest possible value between a given template and injection pair. This speeds up calculations, but may reduce the accuracy of the SNR.')
+parser.add_option('-N', '--vary-n', action='store_true', default=False, help='If turned on, the sample rate and segment length used will be set to the smallest possible value between a given template and injection pair.')
 parser.add_option('-n', '--n-realizations', type = 'int', help = "Number of noise realizations to generate to calculate the mean snr, chisq, and new-snr.")
 parser.add_option('-i', '--ifo', help = "What ifo to inject into. If none specified, no response function will be applied to the injections.")
 parser.add_option('-U', '--user-tag', help = "User tag to add to all output files.")
@@ -74,12 +74,14 @@ ofmin = opts.overlap_f_min
 if ofmin < wfmin:
     raise ValueError, "--waveform-f-min must be less than overlap-f-min"
 
+if opts.sample_rate is None:
+    raise ValueError("must specify a sample-rate")
+target_sample_rate = opts.sample_rate
+if numpy.log2(target_sample_rate) % 1 != 0.:
+    raise ValueError("--sample-rate must be a power of 2")
+
 if not opts.vary_n:
-    if opts.sample_rate is None:
-        raise ValueError("if not --vary-n, must specify a sample-rate")
-    sample_rate = opts.sample_rate
-    if sample_rate is None or numpy.log2(sample_rate) % 1 != 0.:
-        raise ValueError("--sample-rate must be a power of 2")
+    sample_rate = target_sample_rate
     if opts.segment_length is None:
         raise ValueError("if not --vary-n, must specify a segment-length")
     seg_length = opts.segment_length
@@ -230,8 +232,8 @@ for fnum, infile in enumerate(filenames):
             if seg_length < 2:
                 seg_length = 2
 
-            N = sample_rate * seg_length
             df = 1./seg_length
+
 
         # set the segment start time; we'll always make this to be
         # the injection's end_time - 2.5 times its estimated duration
@@ -245,12 +247,6 @@ for fnum, infile in enumerate(filenames):
         htilde = tmplt.get_fd_waveform(sample_rate, seg_length,
             store=opts.use_waveform_cache is not None)
 
-        # we'll need a place to store snr and correlations
-        snr_work_mem = pytypes.zeros(N,
-            dtype=complex_same_precision_as(htilde))
-        corr_work_mem = pytypes.zeros(N,
-            dtype=complex_same_precision_as(htilde))
-
         # get psd and needed workspace vectors
         if opts.asd_file is not None:
             psd = work_space.get_psd_from_file(df, wfmin, sample_rate,
@@ -258,14 +254,50 @@ for fnum, infile in enumerate(filenames):
         else:
             psd = work_space.get_psd(df, wfmin, sample_rate, psd_model)
 
-        # compute the effectualness
-        # Note that because we padded the segment length to be twice the
-        # length of htildeprime and htilde, we do not need to worry
-        # about corruption
-        effectualness, maxidx = filter.match(htildeprime, htilde, psd=psd,
-            low_frequency_cutoff = ofmin)
-        time_offset = segment_start + maxidx / float(sample_rate) - \
-            inj.geocent_time
+        # we'll need a place to store work space vectors;
+        # note that the length of these are set to the
+        # target_sample_rate * the segment length
+        N = target_sample_rate * seg_length
+        kmax = N/2+1
+        snr_work_mem = pytypes.zeros(N,
+            dtype=pytypes.complex_same_precision_as(htilde))
+        corr_work_mem = pytypes.zeros(N,
+            dtype=pytypes.complex_same_precision_as(htilde))
+        #snr_work_mem = None
+        #corr_work_mem = None
+        work_htilde = pytypes.FrequencySeries(pytypes.zeros(kmax,
+            dtype=pytypes.complex_same_precision_as(htilde)),
+            delta_f=htilde.delta_f)
+        work_stilde = pytypes.FrequencySeries(pytypes.zeros(kmax,
+            dtype=pytypes.complex_same_precision_as(htildeprime)),
+            delta_f=htildeprime.delta_f)
+        work_psd = pytypes.FrequencySeries(pytypes.ones(kmax,
+            dtype=pytypes.real_same_precision_as(psd)),
+            delta_f=psd.delta_f)
+
+        # get the chisq bins
+        chisq_bins = vetoes.power_chisq_bins(htilde, opts.n_chisq_bins, psd,
+            ofmin)
+
+        # compute the effectualness. We do this using filter_by_padding. If
+        # the sample_rate is equal to the target_sample_rate, than this
+        # will essentially just call filter.matched_filter_core.
+        cmplx_ts, corr, norm = overlap_utils.filter_by_padding(htilde,
+            htildeprime, psd, ofmin, target_sample_rate, work_v1=work_htilde,
+            work_v2=work_stilde, work_psd=work_psd, out=snr_work_mem,
+            corr_out=corr_work_mem)
+        # normalize and drop the first and last quarter of the time series;
+        # we don't really need to drop the first and last quarter for this,
+        # it will just speed up calculations later on when computing the snr
+        # in noise
+        cmplx_ts = cmplx_ts[N/4:3*N/4]*norm
+        sigmaprime = filter.sigma(htildeprime, psd, ofmin)
+
+        maxidx = abs(cmplx_ts).data.argmax()
+        effectualness = abs(cmplx_ts[maxidx])/sigmaprime
+        offset = (maxidx + N/4) * cmplx_ts.delta_t
+
+        time_offset = segment_start + offset - inj.geocent_time
 
         # cycle over the desired number of sample times, calculating snr,
         # chisq, and newsnr for each
@@ -284,38 +316,40 @@ for fnum, infile in enumerate(filenames):
                 seed = None
             ntilde = noise.frequency_noise_from_psd(psd, seed=seed)
 
-            # add the injection
-            stilde = ntilde + htildeprime
-        
-            # compute snr
-            cmplx_snr, corr, norm = filter.matched_filter_core(htilde, stilde,
-                psd=psd, h_norm=None, low_frequency_cutoff=ofmin,
-                out=snr_work_mem, corr_out=corr_work_mem)
-            maxidx = abs(cmplx_snr.data[N/4:3*N/4]).argmax() + N/4
-            snr = abs(cmplx_snr.data[maxidx]*norm)
-
-            snr2 = abs(filter.matched_filter(htilde, stilde, psd,
-                ofmin).data[N/4:3*N/4]).max()
             # check what the loudest event in noise is
-            randsnr = abs(filter.matched_filter(htilde, ntilde, psd,
-                ofmin).data[N/4:3*N/4]).max()
-           
+            snr_work_mem = pytypes.zeros(N,
+                dtype=pytypes.complex_same_precision_as(htilde))
+            corr_work_mem = pytypes.zeros(N,
+                dtype=pytypes.complex_same_precision_as(htilde))
+            rand_ts, rand_corr, rand_norm = overlap_utils.filter_by_padding(
+                htilde, ntilde, psd, ofmin, target_sample_rate,
+                work_v1=work_htilde, work_v2=work_stilde, work_psd=work_psd, 
+                out=snr_work_mem, corr_out=corr_work_mem)
+
+            # Note: norm and rand_norm should be the same, so we'll just use
+            # norm for the normalization
+            rand_ts = rand_ts[N/4:3*N/4] * norm
+            randsnr = abs(rand_ts).max()
+
+            # the total snr is the sum of the complex time series from the
+            # noise and from the injection
+            snr_ts = cmplx_ts + rand_ts
+            maxidx = abs(snr_ts).data.argmax()
+            snr = abs(snr_ts[maxidx])
+
             # only calculate chisq if the snr is louder than noise
             if snr > randsnr:
+                # the corr to use is just the rand_corr + the injection corr
+                chisq_corr = rand_corr + corr
+                # Note: the indx of the maximum has to be with respect to
+                # the full time series, not to the cropped time series
+                chisq_indx = pytypes.Array(numpy.array([maxidx+N/4]))
+                chisq = vetoes.power_chisq_at_points_from_precomputed(
+                    chisq_corr, pytypes.Array(numpy.array([snr/norm])),
+                    norm, chisq_bins, chisq_indx)[0]
 
-                # get the chisq bins
-                bins = vetoes.power_chisq_bins(htilde, opts.n_chisq_bins, psd,
-                    ofmin)
-
-                #chisq = vetoes.power_chisq_at_points_from_precomputed(corr,
-                #   numpy.array([snr*norm]), norm, bins,
-                #   numpy.array([maxidx]))[0]
-                chisqts = vetoes.chisq.power_chisq_from_precomputed(corr,
-                    cmplx_snr, norm, bins)
-                chisq = chisqts[maxidx]
-                
                 newsnr = overlap_utils.new_snr(snr, chisq,
-                    2*opts.n_chisq_bins - 2)
+                    2*opts.n_chisq_bins-2)
 
                 snrs.append(snr)
                 chisq_vals.append(chisq)
@@ -325,7 +359,7 @@ for fnum, infile in enumerate(filenames):
         # store the results
         this_result = overlap_utils.OverlapResult(tmplt, inj)
         this_result.segment_length = seg_length
-        this_result.sample_rate = sample_rate
+        this_result.sample_rate = int(1./cmplx_ts.delta_t)
         this_result.overlap_f_min = ofmin 
         this_result.waveform_f_min = wfmin
         this_result.tmplt_approximant = opts.approximant 

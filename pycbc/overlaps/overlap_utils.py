@@ -14,9 +14,355 @@ from glue.ligolw import lsctables
 from glue.ligolw import dbtables
 from pylal import ligolw_sqlutils as sqlutils
 
+from pycbc import types as pytypes
+from pycbc import filter
 from pycbc import psd as pyPSD
 from pycbc.overlaps import waveform_utils
 
+from scipy import signal
+
+
+#
+#   Additional filtering functions
+#
+
+def filter_by_padding(htilde, stilde, psd, fmin, target_sample_rate,
+        work_v1=None, work_v2=None, work_psd=None, high_frequency_cutoff=None,
+        h_norm=None, out=None, corr_out=None):
+    """
+    A wrapper around pycbc.filter's matched_filter_core. This function
+    zero-pads htilde and stilde out to the Nyquist frequency of the target
+    sample rate before filtering. The resulting overlap time series is sampled
+    at the target sample rate rather than the sample rate at which h and s were
+    sampled (which should be smaller). This does not recover any power from
+    frequencies higher than h and s's sampling rates; it assumes that either h
+    or s have zero power in the frequencies above their Nyquist frequency.  The
+    goal of this is to get the overlap in points in between the sampled points,
+    so that the maximum can be recovered more precisely.
+    
+    If need be, the psd will also be padded, though 1's will be used. The psd's
+    Nyquist must be greater than or equal to the minimum of htilde and stilde's
+    Nyquist frequency. The Nyquist frequency of each series is assumed to be
+    len(series)*series.delta_f.
+
+    Note that the Nyquist frequencies (and thus the equivalent sampling rates)
+    of htilde, stilde, and the psd do not need to be the same. They only need
+    to have the same frequency resolution (that is, the same delta_f).
+
+    If htilde or stilde have a Nyquist frequency larger than the target sample
+    rate's, a ValueError is raised. If htilde and stilde have the same Nyquist
+    frequency as the target sample rate's, they are passed directly to the
+    matched_filter_core.
+
+    Parameters
+    ----------
+    htilde: FrequencySeries
+        The template waveform.
+    stilde: FrequencySeries
+        The injection or data.
+    psd: (real) FrequencySeries
+        The psd. The Nyquist frequency of this must be >= min(htilde's Nyquist,
+        stilde's Nyquist).
+    fmin: float
+        The lower frequency cutoff to use when performing the filtering.
+    target_sample_rate: int
+        The desired sample rate of the matched-filter time series.
+    work_v1: {None, FrequencySeries}, optional
+        Work-space frequency series to use for htilde when performing
+        the filtering. Must have the same frequency resolution as htilde, and
+        must have a length N/2+1 where N = target_sample_rate/htilde.delta_f.
+        If None specified, one will be generated.
+    work_v2: {None, FrequencySeries}, optional
+        Same as work_v1, but for stilde.
+    work_psd: {None, (real) FrequencySeries}, optional
+        Same as work_v1, but for the psd.
+    high_frequency_cutoff: {None, float}, optional
+        Passed through to matched_filter_core; see that documentation for help.
+    h_norm: {None, float}, optional
+        Passed through to matched_filter_core; see that documentation for help.
+    out: {None, Array}, optional
+        Passed through to matched_filter_core; see that documentation for help.
+    corr_out: {None, Array}, optional
+        Passed through to matched_filter_core; see that documentation for help.
+        
+    Returns
+    -------
+    snr : TimeSeries
+        A time series containing the complex snr. This will have a sample rate
+        equal to the target sample rate.
+    corrrelation: FrequencySeries
+        A frequency series containing the correlation vector. This will be
+        zero-padded out to the Nyquist of the target sample rate.
+    norm : float
+        The normalization of the complex snr.  
+    """
+    if htilde.delta_f != stilde.delta_f or htilde.delta_f != psd.delta_f:
+        raise ValueError(
+            "htilde, stilde, and psd frequency resolution must match")
+    # check that the psd is longer than atleast htilde or stilde
+    if not len(psd) >= min(len(htilde), len(stilde)):
+        raise ValueError(
+            "PSD must go to the same frequency as either htilde or stilde")
+
+    # get the desired N
+    N = target_sample_rate * int(1./htilde.delta_f)
+    kmax = N/2 + 1
+
+    if len(htilde) > kmax:
+        raise ValueError("htilde has higher Nyquist than target_sample_rate/2")
+    if len(stilde) > kmax:
+        raise ValueError("stilde has higher Nyquist than target_sample_rate/2")
+
+    # zero out or create the work space vectors
+    if len(htilde) < kmax:
+        if work_v1 is None:
+            work_v1 = pytypes.FrequencySeries(pytypes.zeros(kmax,
+                dtype=pytypes.complex_same_precision_as(htilde)),
+                delta_f=htilde.delta_f)
+        elif not isinstance(work_v1, pytypes.FrequencySeries):
+            raise TypeError("work_v1 must be a FrequencySeries")
+        elif work_v1.delta_f != htilde.delta_f:
+            raise ValueError("work_v1 delta_f does not match htilde")
+        elif len(work_v1) != kmax:
+            raise ValueError(
+                "last frequency bin of work_v1 != target_sample_rate/2")
+        else:
+            work_v1.clear()
+        # copy htilde data into work_v1. Note that we do not copy htilde's
+        # Nyquist frequency bin, so as not to include it in the filtering
+        work_v1.data[:len(htilde)-1] = htilde.data[:len(htilde)-1]
+    else:
+        # just use htilde since it already has the desired Nyquist
+        work_v1 = htilde
+
+    if len(stilde) < kmax:
+        if work_v2 is None:
+            work_v2 = pytypes.FrequencySeries(pytypes.zeros(kmax,
+                dtype=pytypes.complex_same_precision_as(stilde)),
+                delta_f=stilde.delta_f)
+        elif not isinstance(work_v2, pytypes.FrequencySeries):
+            raise TypeError("work_v2 must be a FrequencySeries")
+        elif work_v2.delta_f != stilde.delta_f:
+            raise ValueError("work_v2 delta_f does not match stilde")
+        elif len(work_v2) != kmax:
+            raise ValueError(
+                "last frequency bin of work_v2 != target_sample_rate/2")
+        else:
+            work_v2.clear()
+        # copy stilde data into work_v2. Note that we do not copy stilde's
+        # Nyquist frequency bin, so as not to include it in the filtering
+        work_v2.data[:len(stilde)-1] = stilde.data[:len(stilde)-1]
+    else:
+        # just use stilde since it already has the desired Nyquist
+        work_v2 = stilde
+    
+    if len(psd) < kmax:
+        if work_psd is None:
+            work_psd = pytypes.FrequencySeries(pytypes.ones(kmax,
+                dtype=pytypes.real_same_precision_as(psd)),
+                delta_f=psd.delta_f)
+        elif not isinstance(work_psd, pytypes.FrequencySeries):
+            raise TypeError("PSD must be a FrequencySeries")
+        elif work_psd.delta_f != psd.delta_f:
+            raise ValueError("work_psd delta_f does not match psd")
+        elif len(work_psd) != kmax:
+            raise ValueError(
+                "last frequency bin of work_psd != target_sample_rate/2")
+        else:
+            work_psd.data[:] = 1
+        work_psd.data[:len(psd)] = psd.data[:]
+    else:
+        work_psd = psd[:kmax]
+
+    # do the filtering
+    return filter.matched_filter_core(work_v1, work_v2, work_psd, fmin,
+        high_frequency_cutoff, h_norm, out, corr_out)
+
+
+
+def upsample_timeseries(timeseries, target_idx, target_sample_rate,
+        max_resample_length=2, copy=True):
+    """
+    Upsamples a time series about the target_idx to the target_sample_rate.  A
+    portion of the time series is selected with the center on the target_idx.
+    This portion is tapered to 0 using a Tukey window, then upsampled to the
+    desired sample rate. The Tukey window used tapers the first and last 1/4 of
+    the selected time seires. If the sample rate of the timeseries is >= the
+    target sample rate, a ValueError is raised.
+
+    Parameters
+    ----------
+    timeseries: pycbc.types.TimeSeries
+        The time series to resample. The current sample rate is taken to be
+        int(1/timeseries.delta_t).
+    target_idx: int
+        The index of the time series about which to do the upsampling. Must
+        be in the range [N/4:3N/4), where N = the length of the time series.
+        If it is not, an IndexError is raised.
+    target_sample_rate: int
+        The sample rate to upsample to. If the sample rate of the input
+        time series is >= this value, a ValueError is raised.
+    max_resample_length: {2, int} optional
+        The maximum duration, in seconds, of the selected portion of the time
+        series to resample. Default is 2. If the duration of the time series is
+        less than this, the entire segment is resampled.
+    copy: {True, bool}, optional
+        If set to True, the portion of the timeseries that is resampled will
+        be copied. If False, the portion of the timeseries that is resampled
+        will be changed due to the windowing. Default is True.
+        
+
+    Returns
+    -------
+    resampled_series: pycbc.types.TimeSeries
+        The portion of the time series resampled to the higher sampling rate.
+        The epoch of this time series is adjusted to take into account the
+        offset between the start of the resampled series and the start of
+        the input series.
+    """
+    seg_length = timeseries.duration
+    sample_rate = int(1./timeseries.delta_t)
+    if sample_rate >= target_sample_rate:
+        raise ValueError(
+            "current sample rate (%i) is >= target sample rate (%i)" %(
+            sample_rate, target_sample_rate))
+    scale_factor = target_sample_rate / sample_rate
+    if seg_length > max_resample_length:
+        resample_length = max_resample_length
+    else:
+        resample_length = seg_length
+
+    selected_N = sample_rate * resample_length
+
+    if target_idx < selected_N/2 or target_idx > len(timeseries) - selected_N/2:
+        raise IndexError(
+            "target_idx (%i) must be in range " %(target_idx) +\
+            "[sample_rate*resample_length/2 (%i), " %(selected_N/2) +\
+            "len(timeseries) - sample_rate*resample_length/2 (%i)" %(
+            len(timeseries) - selected_N/2))
+
+    # generate the window
+    window_N = selected_N / 2
+    window = (1. - numpy.cos(numpy.arange(window_N, dtype=numpy.float)\
+        /window_N * 2 * numpy.pi))/2.
+
+    if copy:
+        use_ts = numpy.zeros(selected_N, dtype=timeseries.dtype)
+        use_ts[:] = timeseries.data[target_idx-selected_N/2:\
+            target_idx+selected_N/2]
+    else:
+        use_ts = timeseries.data[target_idx-selected_N/2:\
+            target_idx+selected_N/2]
+    use_ts[:window_N/2] *= window[:window_N/2]
+    use_ts[-window_N/2:] *= window[-window_N/2:]
+
+    # resample
+    resampled_ts = signal.resample(use_ts, selected_N * scale_factor)
+
+    return pytypes.TimeSeries(resampled_ts, delta_t=1./target_sample_rate,
+        epoch=timeseries.start_time + \
+            (target_idx-selected_N/2)*timeseries.delta_t)
+
+
+def filter_by_resampling(htilde, stilde, psd, fmin, target_sample_rate,
+        max_resample_length=2, check_error=False, high_frequency_cutoff=None,
+        h_norm=None, out=None, corr_out=None):
+    """
+    A wrapper around pycbc.filter's matched_filter_core that uses
+    upsample_timeseries to upsample the cmplx_snr to the target sample rate if
+    it is larger than the sample rate of cmplx_snr.  The cmplx_snr is upsampled
+    around the maximum, with just the resampled region returned. If the sample
+    rate of the cmplx_snr is >= target sample rate, the cmplx_snr is returned
+    as-is. The savings as compared to filtering at the target sample rate
+    depends on ratio of the target sample rate to the input rate (the scale
+    factor) and the size of the resampling length to the length of the
+    cmplx_snr time series. For a resampling length of 2s (the default) and a
+    segment length of 256s, this function was found to be ~ (5/8) * the scale
+    factor faster than filter_by_padding; e.g., with a scale factor of 4, this
+    is 2.5 times faster.
+
+    Parameters
+    ----------
+    htilde: FrequencySeries
+        The template waveform.
+    stilde: FrequencySeries
+        The injection or data.
+    psd: (real) FrequencySeries
+        The PSD.
+    fmin: float
+        The lower frequency cutoff to use when performing the filtering.
+    target_sample_rate: int
+        The desired sample rate of the matched-filter time series.
+    max_resample_length: int
+        Number of (integer) seconds to use for resampling. Default is 2.
+        See the documentation of upsample_timeseries for more details.
+    check_error: bool, optional
+        If set to True, the maximum of abs(cmplx_snr*norm) of the resampled
+        series is compared to the result from filter_by_padding. *WARNING:*
+        turning this on will negate any computational savings. This
+        option is only meant as a check. Default is False.
+    high_frequency_cutoff: {None, float}, optional
+        Passed through to matched_filter_core; see that documentation for help.
+    h_norm: {None, float}, optional
+        Passed through to matched_filter_core; see that documentation for help.
+    out: {None, Array}, optional
+        Passed through to matched_filter_core; see that documentation for help.
+    corr_out: {None, Array}, optional
+        Passed through to matched_filter_core; see that documentation for help.
+
+    Returns
+    -------
+    snr : TimeSeries
+        A time series containing the complex snr. This will have a sample rate
+        >= to the target sample rate. If the sample rate is >= the target rate,
+        the cmplx_snr will be the full time series. If the sample rate < than
+        the target sample rate (meaning resampling was done), the cmplx_snr
+        will only consist of the resampled part.
+    corrrelation: FrequencySeries
+        A frequency series containing the correlation vector. The length of this will be
+        equal to the segment length times the *original* sample_rate, not the resampled
+        rate (i.e., it is the correlation vector you get from matched_filter_core).
+    norm : float
+        The normalization of the complex snr.  
+    maxidx: int
+        The index of the maximum of abs(cmpx_snr)*norm.
+    offset: float
+        The offset, in seconds, between the original cmplx_snr and the resampled.
+    frac_error: {float, None}
+        If check_error turned on, 1 - resampled_max / check_max, where
+        resampled_max is the max of resampled series and check_max is the
+        maximum found by using filter_by_padding.
+    """
+    cmplx_snr, corr, norm = filter.matched_filter_core(htilde, stilde, psd,
+        fmin, high_frequency_cutoff, h_norm, out, corr_out)
+
+    maxidx = (norm*abs(cmplx_snr)).data.argmax()
+
+    # resample if necessary
+    sample_rate = int(1./cmplx_snr.delta_t)
+    if sample_rate < target_sample_rate:
+        orig_start_time = cmplx_snr.start_time
+        cmplx_snr = upsample_timeseries(cmplx_snr, maxidx,
+            target_sample_rate, max_resample_length, copy=False)
+        maxidx = (norm*abs(cmplx_snr)).data.argmax()
+        offset = cmplx_snr.start_time - orig_start_time
+    else:
+        offset = 0.
+
+    if check_error:
+        check_snr, _, check_norm = filter_by_padding(htilde, stilde, psd, fmin,
+            target_sample_rate)
+        check_snr = (check_norm*abs(check_snr)).max()
+        frac_error = 1. - (norm*abs(cmplx_snr[maxidx]))/check_snr
+    else:
+        frac_error = None
+
+    return cmplx_snr, corr, norm, maxidx, offset, frac_error
+
+
+#
+#   Standard file names
+#
 def get_outfilename(output_directory, ifo, user_tag=None, num=None):
     tag = ''
     if user_tag is not None:
@@ -24,7 +370,7 @@ def get_outfilename(output_directory, ifo, user_tag=None, num=None):
     if num is not None:
         tag += '-%i' % (num)
     if ifo is None:
-        ifo = 'RF'
+        ifo = 'ND'
     return '%s/%s-OVERLAPS%s.sqlite' %(output_directory, ifo.upper(), tag)
 
 
@@ -35,7 +381,7 @@ def get_exval_outfilename(output_directory, ifo, user_tag = None, num = None):
     if num is not None:
         tag += '-%i' % (num)
     if ifo is None:
-        ifo = 'RF'
+        ifo = 'ND'
     return '%s/%s-EXPECTATION_VALUES%s.sqlite' %(output_directory, ifo.upper(),
         tag)
 
@@ -99,12 +445,8 @@ def get_psd_models():
 class WorkSpace:
     def __init__(self):
         self.psds = {}
-        self.qs = {}
-        self.q_is = {}
-        self.qtildes = {}
-        self.qtilde_is = {}
-        self.fftplans = {}
-        self.cplxplans = {}
+        self.out_vecs = {}
+        self.corr_vecs = {}
 
     def get_psd(self, df, fmin, sample_rate, psd_model):
         N = int(sample_rate/df)
@@ -127,14 +469,19 @@ class WorkSpace:
     def clear_psds(self):
         self.psds.clear()
 
-    def get_fftplan(self, N, store = False):
+    def get_out_vec(self, N, dtype):
         try:
-            return self.fftplans[N]
+            return self.out_vecs[N, dtype]
         except KeyError:
-            fftplan = lal.CreateForwardREAL8FFTPlan(N, 0)
-            if store:
-                self.fftplans[N] = fftplan 
-            return fftplan
+            self.out_vecs[N, dtype] = pytypes.zeros(N, dtype=dtype)
+            return self.out_vecs[N, dtype]
+
+    def get_corr_vec(self, N, dtype):
+        try:
+            return self.corr_vecs[N, dtype]
+        except KeyError:
+            self.corr_vecs[N, dtype] = pytypes.zeros(N, dtype=dtype)
+            return self.corr_vecs[N, dtype]
 
 
 def new_snr(snr, chisq, chisq_dof):
