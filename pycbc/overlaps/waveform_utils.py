@@ -944,6 +944,12 @@ class TemplateDict(dict):
             # add to self
             self[tmplt.tmplt_id] = tmplt
 
+    def clear_sigmas(self):
+        """
+        Ensures sigma of every template is set to None.
+        """
+        [setattr(inj, 'sigma', None) for inj in self.values()]
+
     def set_sort_key(self, key):
         """
         @key: a list of parameter names to use to sort templates;
@@ -1301,6 +1307,12 @@ class InjectionDict(dict):
             inj.set_archive_id()
             # add to self
             self[inj.simulation_id] = inj
+
+    def clear_sigmas(self):
+        """
+        Ensures sigma of every injection is set to None.
+        """
+        [setattr(inj, 'sigma', None) for inj in self.values()]
 
     def set_sort_key(self, key):
         """
