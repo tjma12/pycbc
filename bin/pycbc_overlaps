@@ -23,6 +23,7 @@ from glue.ligolw.utils import process
 
 from pylal import ligolw_sqlutils as sqlutils
 
+import pycbc
 from pycbc import filter
 from pycbc import types as pytypes
 
@@ -39,6 +40,8 @@ parser.add_option('-F', '--overlap-f-min', type = 'float', help = "Frequency at 
 parser.add_option('-r', '--sample-rate', type = 'int', help = "Required. Sample rate to use (in Hz). Must be a power of 2. If vary-n is turned on and the sample rate used to generate the waveforms and compute overlaps is less than this, the effectulaness time series will be upsampled to this sample rate. If the sample rate used in the overlap calculation is greater than this, that sample rate will be used.")
 parser.add_option('-l', '--segment-length', type = 'int', help = "Segment length to use (in s). Must be a power of 2. Required if vary-n not used.")
 parser.add_option('-n', '--vary-n', action='store_true', default=False, help='If turned on, the sample rate and segment length used will be set to the smallest possible value between a given template and injection. This speeds up overlap calculations, but may reduce the accuracy of the effectualness measurement.')
+parser.add_option('-P', '--precision', metavar="[double|single]", default='double', help="What precision to use. Options are 'double' or 'single'. Default is double.")
+parser.add_option('-D', '--dyn-range-exp', type=int, default=None, help="What power to use for the dynamic range factor, which = 2**dyn_range_exp. This is necessary if using single precision. Default is %i." %(int(numpy.log2(pycbc.DYN_RANGE_FAC))))
 parser.add_option('-i', '--ifo', help = "What ifo to inject into. If none specified, no response function will be applied to the injections.")
 parser.add_option('-U', '--user-tag', help = "User tag to add to all Overlap files.")
 parser.add_option('-M', '--use-injection-cache', metavar = '"memory" or "disk"', help = "Speed up calculations by using an injection cache. Options are 'memory' or 'disk'. If 'memory', all injections will be stored in memory. If 'disk', injections will be stored to a temporary h5py archive. If a temp-space is specified, this temporary archive will be placed there; otherwise, it will be created in the current working directory.")
@@ -92,6 +95,19 @@ if (opts.use_injection_cache is not None and not
     raise ValueError('if using injection cache, --use-injection-cache must ' +\
         'be set to "disk" or "memory"')
 taper = waveform_utils.get_taper_string(opts.taper)
+
+if opts.dyn_range_exp is None:
+    dyn_range_fac = pycbc.DYN_RANGE_FAC
+else:
+    dyn_range_fac = 2.**opts.dyn_range_exp
+if opts.precision.lower() == 'single':
+    real_type = pytypes.float32
+    cmplx_type = pytypes.complex64
+elif opts.precision.lower() == 'double':
+    real_type = pytypes.float64
+    cmplx_type = pytypes.complex128
+else:
+    raise ValueError, "unrecognized precision %s" %(opts.precision)
 
 # load the param window list
 param_windows = {}
@@ -373,9 +389,12 @@ for fnum, infile in enumerate(filenames):
                 # get the psd and needed workspace vectors
                 if opts.asd_file is not None:
                     psd = workSpace.get_psd_from_file(df, wfmin, sample_rate,
-                        opts.asd_file)
+                        opts.asd_file, dyn_range_fac=dyn_range_fac)
                 else:
-                    psd = workSpace.get_psd(df, wfmin, sample_rate, psd_model)
+                    psd = workSpace.get_psd(df, wfmin, sample_rate, psd_model,
+                        dyn_range_fac=dyn_range_fac)
+                
+                psd = psd.astype(real_type)
 
                 if opts.vary_n and lalsim.SimInspiralImplementedTDApproximants(
                         lalsim.GetApproximantFromString(tmplt.approximant)):
@@ -383,6 +402,8 @@ for fnum, infile in enumerate(filenames):
                 else:
                     htilde = tmplt.get_fd_waveform(sample_rate, seg_length,
                         store=False)
+                htilde = htilde * dyn_range_fac
+                htilde = htilde.astype(cmplx_type)
 
             last_tmplt_rate = sample_rate
             last_tmplt_N = N
@@ -425,6 +446,9 @@ for fnum, infile in enumerate(filenames):
             # doesn't exist in the archive
             htildeprime = inj.get_fd_waveform(sample_rate, seg_length,
                 ifo, segment_start, store=opts.use_injection_cache is not None)
+
+            htildeprime = htildeprime * dyn_range_fac
+            htildeprime = htildeprime.astype(cmplx_type)
             
             # get the normalization of htilde, htildeprime if they aren't known yet
             if inj.sigma is None:
@@ -542,8 +566,8 @@ for fnum, infile in enumerate(filenames):
                 print >> sys.stdout, "\ncheckpointing..."
                 sys.stdout.flush()
             archive = overlap_utils.checkpoint(connection, opts.output_dir,
-                archive, now, str(injections[-1].simulation_id),
-                len(injections)-1, str(templates.as_list[-1].tmplt_id),
+                archive, now, str(injections.as_list[-1].simulation_id),
+                len(injections.as_list)-1, str(templates.as_list[-1].tmplt_id),
                 len(templates.as_list)-1, getpass.getuser(),
                 backup_archive=False)
             if working_filename is not None:

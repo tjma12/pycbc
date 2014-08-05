@@ -243,7 +243,8 @@ def upsample_timeseries(timeseries, target_idx, target_sample_rate,
 
     # generate the window
     window_N = selected_N / 2
-    window = (1. - numpy.cos(numpy.arange(window_N, dtype=numpy.float)\
+    window = (1. - numpy.cos(
+        numpy.arange(window_N, dtype=pytypes.real_same_precision_as(timeseries))\
         /window_N * 2 * numpy.pi))/2.
 
     if copy:
@@ -257,9 +258,11 @@ def upsample_timeseries(timeseries, target_idx, target_sample_rate,
     use_ts[-window_N/2:] *= window[-window_N/2:]
 
     # resample
-    resampled_ts = signal.resample(use_ts, selected_N * scale_factor)
+    resampled_ts = signal.resample(use_ts.astype(numpy.complex128),
+        selected_N * scale_factor)
 
-    return pytypes.TimeSeries(resampled_ts, delta_t=1./target_sample_rate,
+    return pytypes.TimeSeries(resampled_ts.astype(timeseries.dtype),
+        delta_t=1./target_sample_rate,
         epoch=timeseries.start_time + \
             (target_idx-selected_N/2)*timeseries.delta_t)
 
@@ -448,22 +451,23 @@ class WorkSpace:
         self.out_vecs = {}
         self.corr_vecs = {}
 
-    def get_psd(self, df, fmin, sample_rate, psd_model):
+    def get_psd(self, df, fmin, sample_rate, psd_model, dyn_range_fac=1.):
         N = int(sample_rate/df)
         try:
             return self.psds[N, sample_rate]
         except KeyError:
-            self.psds[N, sample_rate] = getattr(pyPSD, psd_model)(N/2 + 1, df, fmin)
+            self.psds[N, sample_rate] = \
+                getattr(pyPSD, psd_model)(N/2 + 1, df, fmin)*dyn_range_fac**2.
             return self.psds[N, sample_rate]
 
     def get_psd_from_file(self, df, fmin, sample_rate, filename,
-            is_asd_file=True):
+            is_asd_file=True, dyn_range_fac=1.):
         N = int(sample_rate/df)
         try:
             return self.psds[N, sample_rate]
         except KeyError:
             self.psds[N, sample_rate] = pyPSD.from_txt(filename, N/2 + 1, df,
-                fmin, is_asd_file)
+                fmin, is_asd_file)*dyn_range_fac**2.
             return self.psds[N, sample_rate]
 
     def clear_psds(self):
