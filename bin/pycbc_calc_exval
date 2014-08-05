@@ -331,8 +331,10 @@ for fnum, infile in enumerate(filenames):
             rand_ts = rand_ts[N/4:3*N/4] * norm
             randsnr = abs(rand_ts).max()
 
+
             # the total snr is the sum of the complex time series from the
             # noise and from the injection
+            rand_ts._epoch = cmplx_ts._epoch
             snr_ts = cmplx_ts + rand_ts
             maxidx = abs(snr_ts).data.argmax()
             snr = abs(snr_ts[maxidx])
