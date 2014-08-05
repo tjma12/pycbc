@@ -1,6 +1,6 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 
-__prog__ = 'ccapps_overlaps'
+__prog__ = 'pycbc_overlaps'
 __author__ = 'Collin Capano <collin.capano@ligo.org>'
 __description__ = 'Calculates effectualness for a set of signals given a template bank. Values are stored for the best match.'
 
@@ -230,7 +230,9 @@ for fnum, infile in enumerate(filenames):
             archive = {}
 
         # get the starting index
-        start_idx = startup_dict['tmplt_num'] + 1
+        start_idx = startup_dict['tmplt_num']
+        # we add one to the injection index because the checkpoint always happens
+        # after the injection was analyzed
         start_inj_idx = startup_dict['inj_num'] + 1
 
     else:
@@ -276,7 +278,7 @@ for fnum, infile in enumerate(filenames):
 
     # check that the tmplt_id matches
     if startup_dict and startup_dict['tmplt_id'] is not None:
-        check_tid = templates.as_list[start_idx-1].tmplt_id
+        check_tid = templates.as_list[start_idx].tmplt_id
         if startup_dict['tmplt_id'] != check_tid:
             raise ValueError("starting tmplt_id-1 (%s) " %(check_tid) +\
                 "does not match last tmplt_id in log table (%s)" %(
