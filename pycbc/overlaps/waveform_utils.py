@@ -57,7 +57,7 @@ def zero_pad_h(h, N, position):
     return pyTypes.TimeSeries(newh.data.data, newh.deltaT, epoch = newh.epoch)
 
 
-def position_td_template(h, N):
+def position_td_template(h, peak_index, N):
     """
     Zero-pads and postions a time-domain template with segment-length N.  The
     template is placed such that the peak amplitude occurs at the end of the
@@ -67,6 +67,9 @@ def position_td_template(h, N):
     ----------
     h: pycbc TimeSeries
         The waveform time series to re-position.
+    peak_index: int
+        The location of the peak amplitude in h. The template will be shifted
+        such that this point occurs at the end of the returned time series.
     N: int
         The number of points in the segment.
 
@@ -77,13 +80,37 @@ def position_td_template(h, N):
     """
     if N < len(h):
         raise ValueError("N must be >= the length of h")
+    if peak_index >= len(h):
+        raise ValueError("peak_index must be < the length of h")
 
     new_h = pyTypes.TimeSeries(numpy.zeros(N), delta_t=h.delta_t,
         epoch=h.start_time)
 
-    peakidx = (h.data**2).argmax()
-    new_h[N-peakidx:] = h[:peakidx]
-    new_h[:len(h)-peakidx] = h[peakidx:]
+    # we add 1 to the peak index so that the peak occurs at the last sample
+    # in the time series
+    snip_pt = peak_index + 1
+    new_h[N-snip_pt:] = h[:snip_pt]
+    new_h[:len(h)-snip_pt] = h[snip_pt:]
+
+    return new_h
+
+
+def zero_pad_at_index(h, index, N):
+    """
+    Zero-pads a time series to length N beginning at the point specified by
+    index.  This is useful for zero-padding templates, which may be wrapped
+    around to the beginning of the segment.
+    """
+    orig_N = len(h)
+    if N < orig_N:
+        raise ValueError("N must be >= the length of h")
+    if index > orig_N:
+        raise ValueError("index must be <= the length of h")
+
+    new_h = pyTypes.TimeSeries(numpy.zeros(N), delta_t=h.delta_t,
+        epoch=h.start_time)
+    new_h[:index] = h[:index]
+    new_h[N-(orig_N-index):] = h[index:]
 
     return new_h
 
@@ -91,7 +118,7 @@ def position_td_template(h, N):
 def ligotimegps_from_float(time):
     s, ns = int(numpy.floor(time)), int(round((time % 1)*1e9))
     return lal.LIGOTimeGPS(s, ns)
-    
+
 
 def position_td_injection(h, segment_start, segment_length):
     """
@@ -842,8 +869,22 @@ class Waveform(object):
 #
 class Template(Waveform):
 
-    # we add a tmplt_id for indexing
-    __slots__ = Waveform.__slots__ + ['tmplt_id']
+    # we add a tmplt_id for indexing and wraparound_dur to keep track of
+    # how much of the template is wrapped around to the start of a segment.
+    # This is useful for zero-padding the template.
+    __slots__ = Waveform.__slots__ + ['tmplt_id', '_wraparound_dur']
+
+    def get_wraparound_dur(self):
+        """
+        Returns the amount of time, in seconds, that the template is wrapped
+        around to the start of a segment, so that the peak amplitude is at
+        the end. This is useful for zero-padding the time-domain. This
+        is only known if the waveform has been generated at least once.
+        """
+        if self._wraparound_dur is None:
+            raise ValueError("The wrap around duration is unknown. " + \
+                "Generate a TD waveform to set this.")
+        return self._wraparound_dur
 
     def get_td_waveform(self, sample_rate, segment_length, store=False,
         reposition=True):
@@ -861,11 +902,18 @@ class Template(Waveform):
             if store and (self._archive is None or self._archive_id is None):
                 raise ValueError, "In order to store the waveform, an "+\
                     "archive and archive_id must be set."
-            h, _ = super(Template, self).get_td_waveform(sample_rate,
+            h, cross = super(Template, self).get_td_waveform(sample_rate,
                 store=False)
             # reposition
             if reposition:
-                h = position_td_template(h, segment_length*sample_rate)
+                # find where the peak amplitude is
+                peak_indx = (h.data**2 + cross.data**2).argmax()
+                # keep track of how much of the waveform is wrapped around
+                self._wraparound_dur = (len(h) - peak_indx)*h.delta_t
+                # shift
+                h = position_td_template(h, peak_indx, segment_length*sample_rate)
+            else:
+                self._wraparound_dur = 0.
             if store:
                 self.store_waveform(h, sample_rate, segment_length)
         return h

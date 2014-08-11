@@ -400,6 +400,10 @@ for fnum, infile in enumerate(filenames):
 
                 if opts.vary_n and lalsim.SimInspiralImplementedTDApproximants(
                         lalsim.GetApproximantFromString(tmplt.approximant)):
+                    # zero-pad if necessary
+                    if len(h) != N:
+                        pad_idx = int(tmplt.get_wraparound_dur() / h.delta_t)
+                        h = waveform_utils.zero_pad_at_index(h, pad_idx, N)
                     htilde = filter.make_frequency_series(h)
                 else:
                     htilde = tmplt.get_fd_waveform(sample_rate, seg_length,
