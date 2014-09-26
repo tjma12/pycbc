@@ -219,8 +219,8 @@ def close_scratch_archive(tmp_archive):
 #   Functions to estimate PN expansion
 #
 def schwarzschild_fisco(m1, m2):
-    return lal.LAL_C_SI**3. / (6.**(3./2) * numpy.pi * (m1+m2)*lal.LAL_MSUN_SI
-            * lal.LAL_G_SI)
+    return lal.C_SI**3. / (6.**(3./2) * numpy.pi * (m1+m2)*lal.MSUN_SI
+            * lal.G_SI)
 
 # The following are from Poisson & Will
 def eta_from_m1m2(m1, m2):
@@ -230,15 +230,15 @@ def mchirp_from_m1m2(m1, m2):
     return eta_from_m1m2(m1, m2)**(3./5)*(m1+m2)
 
 def so_coupling(m1, m2, s1z, s2z):
-    m1 = m1 * lal.LAL_MTSUN_SI
-    m2 = m2 * lal.LAL_MTSUN_SI
+    m1 = m1 * lal.MTSUN_SI
+    m2 = m2 * lal.MTSUN_SI
     eta = eta_from_m1m2(m1, m2)
     M = m1+m2
     return sum([(113 * (m_i/M)**2. + 75 * eta)*s_i for m_i, s_i in
         [(m1, s1z), (m2, s2z)]])/12.
 
 def ss_coupling(m1, m2, s1, s2):
-    eta = eta_from_m1m2(m1*lal.LAL_MTSUN_SI, m2*lal.LAL_MTSUN_SI)
+    eta = eta_from_m1m2(m1*lal.MTSUN_SI, m2*lal.MTSUN_SI)
     return (eta/48.) * (-247 * numpy.dot(s1, s2) + 721 * s1[2] * s2[2])
 
 def t0PN(m1, m2, f):
@@ -259,7 +259,7 @@ def t0PN(m1, m2, f):
     tau0: float
         The time-to-coalesence from the starting frequency, in seconds.
     """
-    mchirp = mchirp_from_m1m2(m1, m2) * lal.LAL_MTSUN_SI
+    mchirp = mchirp_from_m1m2(m1, m2) * lal.MTSUN_SI
     return (5./256)* mchirp * (numpy.pi * mchirp * f)**(-8./3)
 
 def t1PN(m1, m2, f):
@@ -280,9 +280,9 @@ def t1PN(m1, m2, f):
     t1PN: float
         The 1PN correction of the time-to-coalesence in seconds
     """
-    mchirp = mchirp_from_m1m2(m1, m2) * lal.LAL_MTSUN_SI
+    mchirp = mchirp_from_m1m2(m1, m2) * lal.MTSUN_SI
     eta = eta_from_m1m2(m1, m2)
-    M = (m1+m2) * lal.LAL_MTSUN_SI
+    M = (m1+m2) * lal.MTSUN_SI
     return  (4./3) * (743./336 + (11./4)*eta) * (numpy.pi * M * f)**(2./3)
 
 def t1_5PN(m1, m2, s1, s2, f):
@@ -307,7 +307,7 @@ def t1_5PN(m1, m2, s1, s2, f):
     t1_5PN: float
         The 1.5PN correction of the time-to-coalesence in seconds
     """
-    M = (m1+m2) * lal.LAL_MTSUN_SI
+    M = (m1+m2) * lal.MTSUN_SI
     beta = so_coupling(m1, m2, s1[2], s2[2])
     return -(8./5) * (4*numpy.pi - beta) * (numpy.pi * M * f)
 
@@ -335,7 +335,7 @@ def t2PN(m1, m2, s1, s2, f):
     """
     eta = eta_from_m1m2(m1, m2)
     sigma = ss_coupling(m1, m2, s1, s2)
-    M = (m1+m2) * lal.LAL_MTSUN_SI
+    M = (m1+m2) * lal.MTSUN_SI
     return 2*(3058673./1016064 + (5429./1008)*eta +
         (617./144)*eta**2. - sigma) * (numpy.pi * M * f)**(4./3)
 
@@ -411,21 +411,21 @@ def estimate_duration(m1, m2, s1, s2, f0, f, order=4):
     
 
 def lambda0(m1, m2, f0):
-    m1 *= lal.LAL_MTSUN_SI
-    m2 *= lal.LAL_MTSUN_SI
+    m1 *= lal.MTSUN_SI
+    m2 *= lal.MTSUN_SI
     mchirp = mchirp_from_m1m2(m1, m2)
     return 3 * (numpy.pi * mchirp * f0)**(-5./3) / 128.
 
 def lambda2(m1, m2, f0):
-    m1 *= lal.LAL_MTSUN_SI
-    m2 *= lal.LAL_MTSUN_SI
+    m1 *= lal.MTSUN_SI
+    m2 *= lal.MTSUN_SI
     mchirp = mchirp_from_m1m2(m1, m2)
     eta = eta_from_m1m2(m1, m2)
     return (5. * (743./336 + 11*eta/4.))/(96 * eta**(2./5)* numpy.pi * mchirp * f0)
 
 def lambda3(m1, m2, s1z, s2z, f0):
-    m1 *= lal.LAL_MTSUN_SI
-    m2 *= lal.LAL_MTSUN_SI
+    m1 *= lal.MTSUN_SI
+    m2 *= lal.MTSUN_SI
     mchirp = mchirp_from_m1m2(m1, m2)
     eta = eta_from_m1m2(m1, m2)
     beta = so_coupling(m1, m2, s1z, s2z)
@@ -523,7 +523,7 @@ class Waveform(object):
         """
         if f_final is None:
             f_final = lalsim.SimInspiralGetFinalFreq(
-                self.mass1*lal.LAL_MSUN_SI, self.mass2*lal.LAL_MSUN_SI,
+                self.mass1*lal.MSUN_SI, self.mass2*lal.MSUN_SI,
                 self.spin1x, self.spin1y, self.spin1z,
                 self.spin2x, self.spin2y, self.spin2z,
                 getattr(lalsim, self.approximant))
@@ -770,10 +770,10 @@ class Waveform(object):
             if lalsim.SimInspiralImplementedTDApproximants(approximant):
                 hplus, hcross = lalsim.SimInspiralChooseTDWaveform(
                     self.phi0, 1./sample_rate,
-                    self.mass1 * lal.LAL_MSUN_SI, self.mass2*lal.LAL_MSUN_SI,
+                    self.mass1 * lal.MSUN_SI, self.mass2*lal.MSUN_SI,
                     self.spin1x, self.spin1y, self.spin1z, self.spin2x,
                     self.spin2y, self.spin2z, self.f_min, self.f_ref,
-                    self.distance * 1e6 * lal.LAL_PC_SI, self.inclination,
+                    self.distance * 1e6 * lal.PC_SI, self.inclination,
                     self.lambda1, self.lambda2, wflags, None,
                     self.amp_order, self.phase_order,
                     approximant)
@@ -839,10 +839,10 @@ class Waveform(object):
                     wflags = None
                 htilde, htilde_cross = lalsim.SimInspiralChooseFDWaveform(
                     self.phi0, 1./segment_length,
-                    self.mass1 * lal.LAL_MSUN_SI, self.mass2*lal.LAL_MSUN_SI,
+                    self.mass1 * lal.MSUN_SI, self.mass2*lal.MSUN_SI,
                     self.spin1x, self.spin1y, self.spin1z, self.spin2x,
                     self.spin2y, self.spin2z, self.f_min, self.f_max,
-                    self.distance * 1e6 * lal.LAL_PC_SI, self.inclination,
+                    self.distance * 1e6 * lal.PC_SI, self.inclination,
                     self.lambda1, self.lambda2, wflags, None,
                     self.amp_order, self.phase_order,
                     approximant)

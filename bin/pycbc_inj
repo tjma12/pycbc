@@ -39,7 +39,7 @@ parser.add_option("-S", "--spin1z-range", metavar = "LowerBound,UpperBound", def
 parser.add_option("-s", "--spin2z-range", metavar = "LowerBound,UpperBound", default = None, help = "The range to distribute the z-component of the spins of the less massive object (mass2). Points will be randomly distributed with a uniform pdf. Values must be in range [-1,1]. If not set, all spins will be set to 0.")
 parser.add_option("-l", "--rand-location", action = "store_true", default = False, help = "Randomize the location.")
 parser.add_option("", "--start-time", type = "int", default = 900000000, help = "Start time, in gps seconds, to use for the injection window. Default is 900000000.")
-parser.add_option("", "--time-window", type = "float", default = lal.LAL_DAYSID_SI, help = "Maximum number of seconds from the start-time to generate an injection. Default is one sidreal day (%f)" % lal.LAL_DAYSID_SI)
+parser.add_option("", "--time-window", type = "float", default = lal.DAYSID_SI, help = "Maximum number of seconds from the start-time to generate an injection. Default is one sidreal day (%f)" % lal.DAYSID_SI)
 parser.add_option("", "--rand-time", action = "store_true", default = False, help = "Randomize the time. The injections geocent_end_times will be randomly distributed between start-time and start-time+time-window.")
 parser.add_option("", "--rand-inclination", action = "store_true", default = False, help = "Randomize the inclination angle. Inclination angles will be chosen uniformly from arccos([-1, 1]).")
 parser.add_option("", "--rand-init-phase", action = "store_true", default = False, help = "Randomize the initial phase angle. Phase angles will be chosen uniformly from [0, 2pi]. If not turned on, initial phase will be set to 0.")
@@ -237,8 +237,8 @@ for n in range(opts.n_points):
     # FIXME: Putting in try/except because not all approximants are supported
     # yet. Once they are, remove.
     try:
-        ffinal = lalsim.SimInspiralGetFinalFreq(mass1*lal.LAL_MSUN_SI,
-            mass2*lal.LAL_MSUN_SI, thisInj.spin1x, thisInj.spin1y, thisInj.spin1z,
+        ffinal = lalsim.SimInspiralGetFinalFreq(mass1*lal.MSUN_SI,
+            mass2*lal.MSUN_SI, thisInj.spin1x, thisInj.spin1y, thisInj.spin1z,
             thisInj.spin2x, thisInj.spin2y, thisInj.spin2z,
             getattr(lalsim, opts.approximant))
     except:

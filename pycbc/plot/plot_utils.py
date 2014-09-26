@@ -42,7 +42,7 @@ class Result:
 
     @property
     def mtotal_s(self):
-        return lal.LAL_MTSUN_SI*self.mtotal
+        return lal.MTSUN_SI*self.mtotal
 
     @property
     def q(self):
@@ -58,11 +58,11 @@ class Result:
 
     @property
     def tau0(self, f0 = 40):
-        return (5./(256*numpy.pi*f0*self.eta))*(numpy.pi*self.mtotal*lal.LAL_MTSUN_SI*f0)**(-5./3.)
+        return (5./(256*numpy.pi*f0*self.eta))*(numpy.pi*self.mtotal*lal.MTSUN_SI*f0)**(-5./3.)
 
     @property
     def v0(self, f0 = 40):
-        return (2*numpy.pi*f0*self.mtotal*lal.LAL_MTSUN_SI)**(1./3)
+        return (2*numpy.pi*f0*self.mtotal*lal.MTSUN_SI)**(1./3)
 
 def parse_results_cache(cache_file):
     filenames = []
