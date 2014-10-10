@@ -267,9 +267,18 @@ def upsample_timeseries(timeseries, target_idx, target_sample_rate,
             (target_idx-selected_N/2)*timeseries.delta_t)
 
 
+def get_common_Nyquist(htilde, stilde):
+    """
+    Given two frequency series, finds the largest Nyquist frequency
+    between the two.
+    """
+    return max((len(htilde)-1)*htilde.delta_f, (len(stilde)-1)*stilde.delta_f)
+
+
 def filter_by_resampling(htilde, stilde, psd, fmin, target_sample_rate,
         max_resample_length=2, check_error=False, high_frequency_cutoff=None,
-        h_norm=None, out=None, corr_out=None):
+        h_norm=None, out=None, corr_out=None, zero_pad_to_common_Nyquist=False,
+        work_v1=None, work_v2=None, work_psd=None):
     """
     A wrapper around pycbc.filter's matched_filter_core that uses
     upsample_timeseries to upsample the cmplx_snr to the target sample rate if
@@ -283,6 +292,11 @@ def filter_by_resampling(htilde, stilde, psd, fmin, target_sample_rate,
     segment length of 256s, this function was found to be ~ (5/8) * the scale
     factor faster than filter_by_padding; e.g., with a scale factor of 4, this
     is 2.5 times faster.
+    
+    If htilde or stilde do not have the same Nyquist, this function will
+    optionally zero-pad to the larger of the two frequency series' Nyquist
+    using filter_by_padding. If this is not desired (see below), an error
+    will be raised if the frequency series do not have the same Nyquist.
 
     Parameters
     ----------
@@ -312,6 +326,28 @@ def filter_by_resampling(htilde, stilde, psd, fmin, target_sample_rate,
         Passed through to matched_filter_core; see that documentation for help.
     corr_out: {None, Array}, optional
         Passed through to matched_filter_core; see that documentation for help.
+    zero_pad_to_common_Nyquist: bool, optional
+        If set to True and stilde and htilde do not have the same Nyquist
+        frequency (i.e., one frequency series is shorter than the other),
+        than the shorter one will be zero-padded to the same length as the
+        longer one then filtered using filter_by_padding. This assumes
+        that the shorter one has no power at frequencies greater than the
+        given Nyquist. The resulting cmplx_snr time series will then be
+        upsampled to the target sample rate. If this is set to False,
+        an error will be raised if stilde and htilde are not the same length.
+    work_v1: {None, FrequencySeries}, optional
+        If zero_pad_to_common_Nyquist is set to True, this is passed to
+        work_v1 option in filter_by_padding to speed up filtering on repeated
+        calls. The Nyquist frequency of this vector must be the same as the
+        common Nyquist between htilde and stilde, which can be found using
+        get_common_Nyquist. If this is not provided, an appropriately sized
+        vector will be generated. See filter_by_padding for more details.
+    work_v2: {None, FrequencySeries}, optional
+        Same as work_v1, but for stilde. See filter_by_padding for more
+        details.
+    work_psd: {None, (real) FrequencySeries}, optional
+        Same as work_v1, but for the psd. See filter_by_padding for more
+        details.
 
     Returns
     -------
@@ -336,8 +372,14 @@ def filter_by_resampling(htilde, stilde, psd, fmin, target_sample_rate,
         resampled_max is the max of resampled series and check_max is the
         maximum found by using filter_by_padding.
     """
-    cmplx_snr, corr, norm = filter.matched_filter_core(htilde, stilde, psd,
-        fmin, high_frequency_cutoff, h_norm, out, corr_out)
+    if zero_pad_to_common_Nyquist:
+        intermediate_rate = 2*get_common_Nyquist(htilde, stilde)
+        cmplx_snr, corr, norm = filter_by_padding(htilde, stilde, psd, fmin,
+            intermediate_rate, work_v1, work_v2, work_psd, high_frequency_cutoff,
+            h_norm, out, corr_out)
+    else:
+        cmplx_snr, corr, norm = filter.matched_filter_core(htilde, stilde, psd,
+            fmin, high_frequency_cutoff, h_norm, out, corr_out)
 
     maxidx = (norm*abs(cmplx_snr)).data.argmax()
 
@@ -450,6 +492,7 @@ class WorkSpace:
         self.psds = {}
         self.out_vecs = {}
         self.corr_vecs = {}
+        self.work_FS_vecs = {}
 
     def get_psd(self, df, fmin, sample_rate, psd_model, dyn_range_fac=1.):
         N = int(sample_rate/df)
@@ -486,6 +529,15 @@ class WorkSpace:
         except KeyError:
             self.corr_vecs[N, dtype] = pytypes.zeros(N, dtype=dtype)
             return self.corr_vecs[N, dtype]
+
+    def get_work_FS_vec(self, label, kmax, seg_length, dtype):
+        try:
+            return self.work_FS_vecs[label, kmax, seg_length, dtype]
+        except KeyError:
+            self.work_FS_vecs[label, kmax, seg_length, dtype] = \
+                pytypes.FrequencySeries(pytypes.zeros(kmax, dtype=dtype),
+                delta_f=1./seg_length)
+            return self.work_FS_vecs[label, kmax, seg_length, dtype]
 
 
 def new_snr(snr, chisq, chisq_dof):

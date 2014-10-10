@@ -84,6 +84,8 @@ if not opts.vary_n:
     seg_length = opts.segment_length
     if seg_length is None or numpy.log2(seg_length) % 1 != 0.:
         raise ValueError("--segment-length must be a power of 2")
+    N = sample_rate * seg_length
+    df = 1./seg_length
 
 if opts.asd_file is None and opts.psd_model is None:
     raise ValueError("must specify --asd-file or --psd-model")
@@ -273,8 +275,8 @@ for fnum, infile in enumerate(filenames):
         print >> sys.stdout, "Database contains %i templates" %(
             len(templates.keys()))
 
-    # order the templates by sample rate, duration
-    templates.set_sort_key(['_f_final', '_duration'])
+    # order the templates by duration, sample_rate
+    templates.set_sort_key(['duration', 'f_final'])
 
     # check that the tmplt_id matches
     if startup_dict and startup_dict['tmplt_id'] is not None:
@@ -284,7 +286,7 @@ for fnum, infile in enumerate(filenames):
                 "does not match last tmplt_id in log table (%s)" %(
                 startup_dict['tmplt_id']))
         elif opts.verbose:
-            print >> sys.stdout, "Starting with template %i..." % (start_idx)
+            print >> sys.stdout, "Starting with template %i..." % (start_idx+1)
 
     # get the injections
     injections = waveform_utils.InjectionDict()
@@ -294,7 +296,7 @@ for fnum, infile in enumerate(filenames):
     injections.clear_sigmas()
     # if vary n, set sort key
     if opts.vary_n:
-        injections.set_sort_key(['_f_final', '_duration'])
+        injections.set_sort_key(['duration', 'f_final'])
 
     # check that the simulation_id matches
     if startup_dict and startup_dict['simulation_id'] is not None:
@@ -305,7 +307,7 @@ for fnum, infile in enumerate(filenames):
                 startup_dict['simulation_id']))
         elif opts.verbose:
             print >> sys.stdout, "Starting with injection %i..." % (
-                start_inj_idx)
+                start_inj_idx+1)
 
     #
     #   Find the best match via fitting factor
@@ -315,24 +317,30 @@ for fnum, infile in enumerate(filenames):
         wpad1 = ''.join([' ' for vv in range(len(str(len(templates))))])
         wpad2 = ''.join([' ' for vv in range(len(str(len(injections))))])
    
-    # we will keep track of the the previous sample rates and durations
-    # used as we cycle over the injections and templates to minimize
-    # the number of times we generate the waveforms
-    last_tmplt_rate = 0
-    # inj rate is a dictionary keyed by simulation_ids so as not to
+    # we will keep track of the the previous segment lengths used
+    # as we cycle over the injections and templates to minimize
+    # the number of times we generate the waveforms;
+    # inj seg lengths is a dictionary keyed by simulation_ids so as not to
     # regenerate the injection every time we regenerate the template
-    last_inj_rate = {}
-    # ditto for durations
-    last_tmplt_N = 0
-    last_inj_N = {}
+    last_inj_seg_lengths = {}
 
-    # cycle over the templates
+
+    #
+    #
+    #       Cycle over the templates
+    #
+    #
     for jj in range(start_idx, len(templates.as_list)):
 
         tmplt = templates.as_list[jj]
         h = htilde = None
+        last_tmplt_seg_length = 0
 
-        # cycle over the injections 
+        #
+        #
+        #       Cycle over the injections 
+        #
+        #
         for ii, inj in enumerate(injections.as_list):
             # skip if already done at start
             if jj == start_idx and ii < start_inj_idx:
@@ -354,128 +362,151 @@ for fnum, infile in enumerate(filenames):
             except KeyError:
                 pass
 
-            # get the sample rate and segment length to use
-            if opts.vary_n:
-                sample_rate = int(2**(numpy.ceil(numpy.log2(
-                    max(tmplt.get_f_final(), inj.get_f_final()))+1)))
+            # set the segment start time; we'll always make this to be
+            # the injection's end_time - 1.5 times its estimated duration
+            segment_start = inj.detector_end_time(ifo) - 1.5*inj.duration
 
+            #
+            #   If varying N, figure out the sample rate and segment
+            #   lengths to use, and generate the template and injection
+            #   waveforms accordingly
+            #
+            if opts.vary_n:
                 # get the segment length to use
                 # we'll set the segment length to be twice the max duration
                 # of this template and the injection
                 seg_length = int(2**(numpy.ceil(numpy.log2(
-                    max(tmplt.get_duration(), inj.get_duration())))+1))
+                    max(tmplt.duration, inj.duration)))+1))
+
+                # Although we will eventually 0-pad in the FD to get a common
+                # sample rate, we need to know what this common rate is for
+                # PSD generation.
+                sample_rate = int(2**(numpy.ceil(numpy.log2(
+                    max(tmplt.f_final, inj.f_final))+1)))
 
                 # since the duration estimates are based on the 2PN
                 # approximation, the duration may be too short; we'll just put
                 # a floor at 2s
                 if seg_length < 2:
                     seg_length = 2
+               
+                N = sample_rate * seg_length
+                df = 1./seg_length
 
-                # for TD waveforms, if the sample rate isn't the same as the
-                # last, have to regenerate the template
-                if lalsim.SimInspiralImplementedTDApproximants(
-                        lalsim.GetApproximantFromString(tmplt.approximant)) \
-                        and (sample_rate != last_tmplt_rate or not h):
-                    h = tmplt.get_td_waveform(sample_rate,
-                            seg_length, store=False)
+                # if the segment length has changed, we need to regenerate
+                # FD waveforms. For TD waveforms, we just need to 0-pad and
+                # FFT. Note that if the TD waveforms have not been generated
+                # yet, they will be generated here for the first time.
 
-            N = seg_length * sample_rate
-            df = 1./seg_length
-
-            # if the duration isn't the same as the last used, have to
-            # regenerate the FD form of the template, and get the correct
-            # sized workspace vectors (note that this will only get
-            # triggered once if not varying n)
-            if N != last_tmplt_N or sample_rate != last_tmplt_rate or \
-                    not htilde:
-                # get the psd and needed workspace vectors
-                if opts.asd_file is not None:
-                    psd = workSpace.get_psd_from_file(df, wfmin, sample_rate,
-                        opts.asd_file, dyn_range_fac=dyn_range_fac)
-                else:
-                    psd = workSpace.get_psd(df, wfmin, sample_rate, psd_model,
-                        dyn_range_fac=dyn_range_fac)
-                
-                psd = psd.astype(real_type)
-
-                if opts.vary_n and lalsim.SimInspiralImplementedTDApproximants(
-                        lalsim.GetApproximantFromString(tmplt.approximant)):
-                    # zero-pad if necessary
-                    if len(h) != N:
+                #   The template:
+                if seg_length != last_tmplt_seg_length:
+                    if lalsim.SimInspiralImplementedTDApproximants(
+                            lalsim.GetApproximantFromString(tmplt.approximant)):
+                        # TD waveform, zero-pad (or generate then zero-pad, if
+                        # this is the first instance)
+                        if h is None:
+                            h = tmplt.get_td_waveform(tmplt.min_sample_rate,
+                                tmplt.min_seg_length, store=False,
+                                reposition=True)
+                        # Because we sorted the injections by increasing
+                        # duration, we can simply update the last h used with the
+                        # extra 0's needed; i.e., this only ever increases the size
+                        # of h, it never decreases.
                         pad_idx = int(tmplt.get_wraparound_dur() / h.delta_t)
-                        h = waveform_utils.zero_pad_at_index(h, pad_idx, N)
-                    htilde = filter.make_frequency_series(h)
-                else:
+                        h = waveform_utils.zero_pad_at_index(h, pad_idx,
+                            tmplt.min_sample_rate*seg_length)
+                        htilde = filter.make_frequency_series(h)
+                    else:
+                        # FD waveform, just have to regenerate
+                        htilde = tmplt.get_fd_waveform(tmplt.min_sample_rate,
+                            seg_length, store=False)
+                    htilde = htilde * dyn_range_fac
+                    htilde = htilde.astype(cmplx_type)
+                    # update
+                    last_tmplt_seg_length = seg_length
+
+                #   The injection:
+                # If the segment length has changed, we'll delete the shorter
+                # length FD waveform from the archive as we will not need it
+                # again (recall that the templates are sorted in increasing
+                # duration) to save space
+                last_inj_seg_length = last_inj_seg_lengths.setdefault(
+                    str(inj.simulation_id), 0)
+                if seg_length != last_inj_seg_length:
+                    inj.del_from_archive(sample_rate, last_inj_seg_length, ifo,
+                        segment_start, 'FD', del_unsegmented=False)
+                    last_inj_seg_lengths[inj.simulation_id] = seg_length
+                # now get/create the injection
+                htildeprime = inj.get_fd_waveform(inj.min_sample_rate,
+                    seg_length, ifo, segment_start,
+                    store=opts.use_injection_cache is not None,
+                    store_td=opts.use_injection_cache is not None)
+                htildeprime = htildeprime * dyn_range_fac
+                htildeprime = htildeprime.astype(cmplx_type)
+
+
+            #
+            # If not varying n, just generate/retrieve the waveforms at the
+            # desired sample rate
+            #
+            else: 
+                if htilde is None:
                     htilde = tmplt.get_fd_waveform(sample_rate, seg_length,
                         store=False)
-                htilde = htilde * dyn_range_fac
-                htilde = htilde.astype(cmplx_type)
+                    htilde = htilde * dyn_range_fac
+                    htilde = htilde.astype(cmplx_type)
 
-            last_tmplt_rate = sample_rate
-            last_tmplt_N = N
-           
-            # set the segment start time; we'll always make this to be
-            # the injection's end_time - 1.5 times its estimated duration
-            segment_start = inj.detector_end_time(ifo) - 1.5*inj.get_duration()
+                htildeprime = inj.get_fd_waveform(sample_rate, seg_length,
+                    ifo, segment_start,
+                    store=opts.use_injection_cache is not None)
+                htildeprime = htildeprime * dyn_range_fac
+                htildeprime = htildeprime.astype(cmplx_type)
 
-            # for the injection, we just need to update the archive
-            # appropriately: if the TD or FD waveform doesn't exist at the
-            # desired rate/length in the archive, the code in waveform_utils
-            # will update it automatically
-            last_rate = last_inj_rate.setdefault(
-                str(inj.simulation_id), 0)
-            last_N = last_inj_N.setdefault(str(inj.simulation_id), 0)
-            if sample_rate != last_rate:
-                # means we have to regenerate both the TD and FD waveform, so
-                # we clear the archive of the injection's instances of both at
-                # the prior rate/duration
-                inj.del_from_archive(sample_rate, seg_length, ifo,
-                    segment_start, 'TD')
-                inj.del_from_archive(sample_rate, seg_length, ifo,
-                    segment_start, 'FD')
-            if N != last_N:
-                # means we have to delete the FD waveform
-                inj.del_from_archive(sample_rate, seg_length, ifo,
-                    segment_start, 'FD')
-
-            # as a last cleanup, delete any dangling keys that no longer point
-            # to anything in the archive
-            for key in archive.keys():
-                if archive[key].values() == []:
-                    del archive[key]
-
-            # update the rate/duration dicts
-            last_inj_rate[str(inj.simulation_id)] = sample_rate
-            last_inj_N[str(inj.simulation_id)] = N
-
-            # get the FD injection; this will also store the TD injection if it
-            # doesn't exist in the archive
-            htildeprime = inj.get_fd_waveform(sample_rate, seg_length,
-                ifo, segment_start, store=opts.use_injection_cache is not None)
-
-            htildeprime = htildeprime * dyn_range_fac
-            htildeprime = htildeprime.astype(cmplx_type)
-            
-            # get the normalization of htilde, htildeprime if they aren't known yet
-            if inj.sigma is None:
-                inj.sigma = filter.sigma(htildeprime, psd, ofmin)
-            if tmplt.sigma is None:
-                tmplt.sigma = filter.sigma(htilde, psd, ofmin)
+            #
+            #   Get the PSD and needed workspace vectors
+            #
+            if opts.asd_file is not None:
+                psd = workSpace.get_psd_from_file(df, wfmin, sample_rate,
+                    opts.asd_file, dyn_range_fac=dyn_range_fac)
+            else:
+                psd = workSpace.get_psd(df, wfmin, sample_rate, psd_model,
+                    dyn_range_fac=dyn_range_fac)
+            psd = psd.astype(real_type)
 
             # get work vectors
             out_work_mem = workSpace.get_out_vec(N,
                 pytypes.complex_same_precision_as(htilde))
             corr_work_mem = workSpace.get_corr_vec(N,
                 pytypes.complex_same_precision_as(htilde))
+            if opts.vary_n:
+                work_v1 = workSpace.get_work_FS_vec('v1', N/2+1, seg_length,
+                    pytypes.complex_same_precision_as(htilde))
+                work_v2 = workSpace.get_work_FS_vec('v2', N/2+1, seg_length,
+                    pytypes.complex_same_precision_as(htildeprime))
+                work_psd = workSpace.get_work_FS_vec('psd', N/2+1, seg_length,
+                    pytypes.real_same_precision_as(psd))
+            else:
+                work_v1 = work_v2 = work_psd = None
 
-            # compute effectualness
-            # Note that because we padded the segment length to be twice the
-            # length of htildeprime and htilde, we do not need to worry
-            # about corruption
+            # get the normalization of htilde, htildeprime if they aren't known yet
+            if inj.sigma is None:
+                inj.sigma = filter.sigma(htildeprime, psd[:len(htildeprime)],
+                    ofmin)
+            if tmplt.sigma is None:
+                tmplt.sigma = filter.sigma(htilde, psd[:len(htilde)], ofmin)
+
+            #
+            #   Compute effectualness
+            #
             cmplx_ts, _, norm, maxidx, offset, _ = overlap_utils.filter_by_resampling(
                 htilde, htildeprime, psd, ofmin, target_sample_rate,
                 max_resample_length=2, h_norm=tmplt.sigma**2, out=out_work_mem,
-                corr_out=corr_work_mem)
+                corr_out=corr_work_mem, zero_pad_to_common_Nyquist=opts.vary_n,
+                work_v1=work_v1, work_v2=work_v2, work_psd=work_psd)
+
+            # Note: because we padded the segment length to be twice the
+            # length of htildeprime and htilde, we do not need to worry
+            # about corruption
 
             effectualness = abs(cmplx_ts[maxidx]*norm)/inj.sigma
 

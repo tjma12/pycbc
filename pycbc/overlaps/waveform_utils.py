@@ -530,11 +530,23 @@ class Waveform(object):
         self._f_final = f_final
         return self._f_final 
 
-    def get_f_final(self, cache=False):
+    @property
+    def f_final(self):
         """
         Returns whatever self._f_final is set to.
         """
         return self._f_final 
+
+    @property
+    def min_sample_rate(self):
+        """
+        Returns the nearest power of 2 to twice f_final.
+        If _f_final is not set, an error is raised.
+        """
+        try:
+            return int(2**(numpy.ceil(numpy.log2(self._f_final)+1)))
+        except AttributeError:
+            raise ValueError("f_final not set")
 
     def estimate_duration(self, f_min, f_final=None, order=4):
         """
@@ -569,11 +581,24 @@ class Waveform(object):
         """
         self._duration = duration
 
-    def get_duration(self):
+    @property
+    def duration(self):
         """
         Returns whatever self._duration is set to.
         """
         return self._duration
+
+    @property
+    def min_seg_length(self):
+        """
+        Returns the nearest power of 2 to twice the duration.
+        If _duration is not set, an error is raised.
+        """
+        try:
+            return int(2**(numpy.ceil(numpy.log2(self._duration)+1)))
+        except AttributeError:
+            raise ValueError("duration not set")
+
 
     # archive related
     def set_archive(self, archive={}):
@@ -798,7 +823,7 @@ class Waveform(object):
 
                 if store:
                     self.store_waveform(hplus, sample_rate, segment_length,
-                        hcross=hcross)
+                        hcross=hcross, tag=str(position))
 
             else:
                 # FD waveform
@@ -810,7 +835,7 @@ class Waveform(object):
 
 
     def get_fd_waveform(self, sample_rate, segment_length, position=0,
-            store=False):
+            store=False, store_td=False):
 
         try:
             htilde, htilde_cross = self.waveform_from_archive(sample_rate,
@@ -824,9 +849,18 @@ class Waveform(object):
                     "archive and archive_id must be set."
             approximant = lalsim.GetApproximantFromString(str(self.approximant))
             if lalsim.SimInspiralImplementedTDApproximants(approximant):
+                # we use None as the segment length to limit the size of the
+                # TD waveform stored; this also makes repeated calls to
+                # the same waveform but with just a different segment length
+                # faster
                 hplus, hcross = self.get_td_waveform(sample_rate,
-                    segment_length, position=position, archive=archive,
-                    store=store)
+                    segment_length=None, position=0, archive=archive,
+                    store=store_td)
+                # zero pad to the desired segment length 
+                N = int(sample_rate * segment_length)
+                hplus = zero_pad_h(hplus, N, position)
+                hcross = zero_pad_h(hcross, N, position)
+
                 htilde = filter.make_frequency_series(hplus)
                 htilde_cross = filter.make_frequency_series(htilde_cross)
 
@@ -887,11 +921,35 @@ class Template(Waveform):
         return self._wraparound_dur
 
     def get_td_waveform(self, sample_rate, segment_length, store=False,
-        reposition=True):
+        reposition=True, store_unpadded=False):
         """
         Modifies Waveform's get_td_waveform such that only hplus is used.
         Will also optionally reposition the template such that the peak is
         at the end of the segment.
+
+        Parameters
+        ----------
+        sample_rate: int
+            The rate (in Hz) at which to generate the waveform.
+        segment_length: int
+            The length (in s) of the segment in which to place the template.
+        store: bool
+            Whether or not to store the waveform in the archive. This will
+            store the waveform padded to the desired segment length. Default
+            is False.
+        reposition: bool
+            Whether or not to reposition the template. If True, the template
+            will be placed such that the peak amplitude occurs at the end of
+            the segment, with the rest wrapped around to the start. The amount
+            of wrap-around (in s) will be saved to self._wraparound_dur.
+        store_unpadded: bool
+            Whether or not to store the waveform prior to 0-padding and
+            repositioning. Default is False.
+
+        Returns
+        -------
+        h: TimeSeries
+            The time-domain waveform.
         """
         try:
             h, _ = self.waveform_from_archive(sample_rate, segment_length,
@@ -899,11 +957,12 @@ class Template(Waveform):
         except KeyError:
             # if we're going to store, make sure that archive and archive_id
             # have been set before trying to generate the waveform
-            if store and (self._archive is None or self._archive_id is None):
+            if (store or store_unpadded) and \
+                    (self._archive is None or self._archive_id is None):
                 raise ValueError, "In order to store the waveform, an "+\
                     "archive and archive_id must be set."
             h, cross = super(Template, self).get_td_waveform(sample_rate,
-                store=False)
+                store=store_unpadded)
             # reposition
             if reposition:
                 # find where the peak amplitude is
@@ -918,11 +977,31 @@ class Template(Waveform):
                 self.store_waveform(h, sample_rate, segment_length)
         return h
 
-    def get_fd_waveform(self, sample_rate, segment_length, store=False):
+    def get_fd_waveform(self, sample_rate, segment_length, store=False,
+            store_td=False):
         """
         Modifies Waveform's get_fd_waveform such that only hplus is used,
         and such that the template is placed so that the peak is at the
         end of the segment.
+
+        Parameters
+        ----------
+        sample_rate: int
+            Twice the Nyquist frequency of the desired waveform. If this
+            is a time-domain approximant, this is the sampling rate that
+            will be used to generate the waveform.
+        segment_length: int
+            The inverse of the delta_f to use for generating the waveform.
+            If this is a time-domain approximant, the segment in which
+            the waveform resides will be 0-padded to this length before
+            the FFT is taken.
+        store: bool
+            Whether or not to store the FD waveform in the archive. Default is
+            False.
+        store_td: bool
+            For time-domain approximants, whether or not to store the TD
+            version of the waveform in the archive. The TD waveform will
+            be stored prior to 0-padding.
         """
         try:
             htilde, _ = self.waveform_from_archive(sample_rate,
@@ -935,11 +1014,9 @@ class Template(Waveform):
                     "archive and archive_id must be set."
             approximant = lalsim.GetApproximantFromString(
                 str(self.approximant))
-            # note that if we are storing the waveform, this will also store
-            # the time-domain version
             if lalsim.SimInspiralImplementedTDApproximants(approximant):
                 h = self.get_td_waveform(sample_rate, segment_length,
-                        store=store)
+                        store=False, store_unpadded=store_td)
                 htilde = filter.make_frequency_series(h)
             else:
                 # if FD waveform, just call parent class's version
@@ -956,7 +1033,7 @@ class TemplateDict(dict):
         self._sort_key = None
 
     def get_templates(self, connection, approximant, f_min, amp_order=None,
-            phase_order=None, spin_order=None, taper=None, archive={},
+            phase_order=None, spin_order=None, taper=None, archive=None,
             calc_f_final=True, estimate_dur=True, verbose=False,
             only_matching=False):
         if verbose:
@@ -987,8 +1064,9 @@ class TemplateDict(dict):
             if estimate_dur:
                 # we'll use fisco as the terminating frequency
                 tmplt.set_duration(tmplt.estimate_duration(tmplt.f_min))
-            tmplt.set_archive(archive)
-            tmplt.set_archive_id()
+            if archive is not None:
+                tmplt.set_archive(archive)
+                tmplt.set_archive_id()
             # add to self
             self[tmplt.tmplt_id] = tmplt
 
@@ -1117,8 +1195,9 @@ class Injection(Waveform):
             is used.
         store_unsegmented: Bool
             Whether or not to store the waveform prior to padding and shifting
-            in the archive. This requires less space to store, but will slow
-            down repeated calls to the same waveform in the same segment.
+            in the archive. Setting to False requires less space to store, but
+            will slow down repeated calls to the same waveform in the same
+            segment.
 
         Returns
         -------
@@ -1136,7 +1215,7 @@ class Injection(Waveform):
         except KeyError:
             # if segmented not present in archive, try the unsegmented one
             try:
-                h, _ = self.waveform_from_archive(sample_rate, segment_length,
+                h, _ = self.waveform_from_archive(sample_rate, None,
                     'TD', tag=str(ifo))
             except KeyError:
                 # neither, generate the waveform
@@ -1175,8 +1254,7 @@ class Injection(Waveform):
                         epoch=h.epoch)
 
                 if store_unsegmented:
-                    self.store_waveform(h, sample_rate, segment_length,
-                        tag=str(ifo))
+                    self.store_waveform(h, sample_rate, None, tag=str(ifo))
 
             # zero-pad and shift h so that it sits in the appropriate
             # spot in the segment
@@ -1190,7 +1268,7 @@ class Injection(Waveform):
 
 
     def get_fd_waveform(self, sample_rate, segment_length, ifo, segment_start,
-            store=False):
+            store=False, store_td=False):
         """
         Modifies Waveform's get_fd_waveform such that the detector response
         is applied to the waveform for the given detector.
@@ -1216,9 +1294,13 @@ class Injection(Waveform):
             [segment_start, segment_start + segment_length), that portion will
             be clipped off.  If no part of the injection falls in the segment,
             an error will be raised.
-        store: Bool
+        store: bool
             Whether or not to store the waveform in the given archive. Default
             is False.
+        store_td: bool
+            For time-domain approximants, whether or not to store the TD
+            version of the waveform in the archive. The TD waveform will
+            be stored prior to 0-padding.
 
         Returns
         -------
@@ -1244,7 +1326,8 @@ class Injection(Waveform):
             approximant = lalsim.GetApproximantFromString(str(self.approximant))
             if lalsim.SimInspiralImplementedTDApproximants(approximant):
                 h = self.get_td_waveform(sample_rate, segment_length,
-                        ifo, segment_start, store=store)
+                        ifo, segment_start, store=False,
+                        store_unsegmented=store_td)
                 htilde = filter.make_frequency_series(h)
 
             else:
@@ -1257,7 +1340,7 @@ class Injection(Waveform):
                         an FD approximant. Either generate the waveform with
                         no ifo, (carefully) FFT to time-series, then apply,
                         or use an equivalent TD approximant instead."""
-                # check that the injection would occurs completely
+                # check that the injection occurs completely
                 # within the segment
                 if self._duration is None:
                     if self._f_final is None:
