@@ -549,6 +549,42 @@ def new_snr(snr, chisq, chisq_dof):
     return newsnr
 
 class ParamWindow(segments.segment):
+    """
+    A glue.segments.segment that adds additional arguments to quickly check if
+    the value of a parameter lies within the desired range. The values of the
+    segment give the range of parameters for which the window is valid.  The
+    properties min_jitter and max_jitter give the fractional size of the
+    window that is used. The function recovery_window gives the size of the
+    window given some parameter window. For example, if you wanted to only
+    filter templates that were within -10%, +20% of an injection's chirp mass
+    for injections that had chirp masses between 8 and 12 solar masses, you
+    would create the following parameter window:
+
+    >>> pwin = overlap_utils.ParamWindow(8., 12.)
+    >>> pwin
+        segment(8.0, 12.0)
+    >>> pwin.set_jitter(-0.1, 0.2)
+   
+    Now say you have an injection with chirp mass = 9.2 solar masses. The range
+    of values that lie within the desired range is:
+
+    >>> pwin.recovery_window(9.2)
+        segment(8.28, 11.04)
+
+    If you want to know whether or not a value is within the window of a given
+    chirp mass:
+
+    >>> pwin.in_recovered(9.2, 7.)
+        False
+    >>> pwin.in_recovered(9.2, 8.6)
+        True
+
+    If you try a value that is out of the range of validity, you get an error:
+
+    >>> pwin.recovery_window(6.)
+    ValueError: 6.000000 is not in the region of validity [8.000000, 12.000000)
+    """
+
     min_jitter = None
     max_jitter = None
 
@@ -557,13 +593,16 @@ class ParamWindow(segments.segment):
         self.max_jitter = max_jitter
 
     def recovery_window(self, value):
-        return segments.segment(value*(1. + self.min_jitter), value*(1. + self.max_jitter))
+        if value not in self:
+            raise ValueError("%f is not in the region of validity [%f, %f)" %(
+                value, self[0], self[1]))
+        if self.min_jitter is None or self.max_jitter is None:
+            raise ValueError("min and max jitter are not set")
+        return segments.segment(value*(1. + self.min_jitter),
+            value*(1. + self.max_jitter))
 
-    def in_recovered(self, value):
-        return value in self.recovery_window(value)
-
-    def get_injected_window(self):
-        return self.injected_window
+    def in_recovered(self, reference_value, value):
+        return value in self.recovery_window(reference_value)
 
     @property
     def min_injected(self):
@@ -1004,58 +1043,6 @@ def clean_backup_files(connection):#workingfile, outfile):
     if last_bkup_arxv is not None and os.path.exists(last_bkup_arxv):
         os.remove(last_bkup_arxv)
 
-
-# FIXME: Kludges until ringdown branch is merged with master
-#from glue.ligolw import ilwd
-#def write_newstyle_coinc_def_entry( connection, description, search = None, search_coinc_type = None ):
-#    """
-#    Adds a new entry to the coinc_definer_table. The only thing used to discriminate
-#    different coinc_definer entries is the description column. Search and search_coinc_type
-#    can also be optionally specified.
-#    """
-#    sqlquery = "SELECT coinc_def_id FROM coinc_definer WHERE description == ?"
-#    results = connection.cursor().execute( sqlquery, (description,) ).fetchall()
-#    if results == []:
-#        # none found, write new entry
-#        this_id = sqlutils.get_next_id( connection, 'coinc_definer', 'coinc_def_id' )
-#        sqlquery = 'INSERT INTO coinc_definer (coinc_def_id, description, search, search_coinc_type) VALUES (?, ?, ?, ?)'
-#        connection.cursor().execute( sqlquery, (str(this_id), description, search, search_coinc_type) )
-#        #connection.commit()
-#    else:
-#        this_id = ilwd.get_ilwdchar(results.pop()[0])
-#
-#    return this_id
-#
-#def add_coinc_event_entries( connection, process_id, coinc_def_id, time_slide_id, num_new_entries = 1 ):
-#    """
-#    Writes N new entries in the coinc_event table, where N is given by num_new_entries.
-#    """
-#    # get the next id
-#    start_id = sqlutils.get_next_id( connection, 'coinc_event', 'coinc_event_id' )
-#    # create list of new entries to add
-#    new_entries = [(str(process_id), str(coinc_def_id), str(time_slide_id), str(start_id+ii)) for ii in range(num_new_entries)]
-#    # add the entries to the coinc_event tabe
-#    sqlquery = 'INSERT INTO coinc_event (process_id, coinc_def_id, time_slide_id, coinc_event_id) VALUES (?, ?, ?, ?)'
-#    connection.cursor().executemany( sqlquery, new_entries )
-#    # return the coinc_event_ids of the new entries
-#    return [ilwd.get_ilwdchar(new_id[-1]) for new_id in new_entries]
-#
-#def get_next_id(connection, table, id_column):
-#    """
-#    Gets the next available id in the specified id_column in the specified table.
-#    """
-#    sqlquery = ' '.join(['SELECT', id_column, 'FROM', table ])
-#    ids = dict([ [int(ilwd.get_ilwdchar(this_id)), ilwd.get_ilwdchar(this_id)] for (this_id,) in connection.cursor().execute(sqlquery)])
-#    if ids == {}:
-#        new_id = ilwd.get_ilwdchar(':'.join([table, id_column, '0']))
-#    else:
-#        new_id = ids[ max(ids.keys()) ] + 1
-#    return new_id
-#
-#sqlutils.write_newstyle_coinc_def_entry = write_newstyle_coinc_def_entry
-#sqlutils.add_coinc_event_entries = add_coinc_event_entries
-#sqlutils.get_next_id = get_next_id
-#
 
 def write_result_to_database(connection, result, match_tag, process_id):
     # get the id associated with this match tag

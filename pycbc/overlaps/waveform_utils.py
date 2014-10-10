@@ -1031,6 +1031,7 @@ class TemplateDict(dict):
 
     def __init__(self):
         self._sort_key = None
+        self._as_list = None
 
     def get_templates(self, connection, approximant, f_min, amp_order=None,
             phase_order=None, spin_order=None, taper=None, archive=None,
@@ -1082,13 +1083,17 @@ class TemplateDict(dict):
          order priority will be based on the order of values in key
         """
         self._sort_key = operator.attrgetter(*key)
+        # clear self's sorted list
+        self._as_list = None
 
     def get_sort_key(self):
         return self._sort_key
 
     @property
     def as_list(self):
-        return sorted(self.values(), key = self.get_sort_key())
+        if self._as_list is None:
+            self._as_list = sorted(self.values(), key = self.get_sort_key())
+        return self._as_list 
 
 
 #
@@ -1415,6 +1420,7 @@ class InjectionDict(dict):
 
     def __init__(self):
         self._sort_key = None
+        self._as_list = None
 
     def get_injections(self, connection, f_min, archive={}, calc_f_final=True,
             estimate_dur=True, verbose=False):
@@ -1451,10 +1457,14 @@ class InjectionDict(dict):
          order priority will be based on the order of values in key
         """
         self._sort_key = operator.attrgetter(*key)
+        # clear self's sorted list
+        self._as_list = None
 
     def get_sort_key(self):
         return self._sort_key
 
     @property
     def as_list(self):
+        if self._as_list is None:
+            self._as_list = sorted(self.values(), key = self.get_sort_key())
         return sorted(self.values(), key=self.get_sort_key())

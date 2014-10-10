@@ -50,7 +50,8 @@ parser.add_option("", "--amp-order", type=int, default=0, help="Amplitude order 
 parser.add_option("", "--phase-order", type=int, default=7, help="Phase order to use for templates. Default is 7 (3.5PN).")
 parser.add_option("", "--spin-order", type=int, default=None, help="Spin order to use for templates.")
 parser.add_option("", "--taper", help = "For TD approximants, set whether or not to taper the templates at the start and/or end. Options are: start, end, start_end. If not specified, no tapering will be done.")
-parser.add_option('', '--match-window-db', help = 'Use the match windows specified in the given database to reduce the number of overlaps computed.')
+parser.add_option('', '--simple-window', metavar='PARAM:LOWER[:UPPER]', help="Only filter templates that lie within the given fractional range of the given parameter of an injection. LOWER must be < 1. If an UPPER is not specified, the LOWER fractional range will be used. For example, if set to mchirp:0.2, only templates that have an mchirp within +/-0.2 of an injection's mchirp will be filtered with that injection. If set to mchirp:0.2:0.5, templates with an mchirp [- 0.2, +0.5] * the injection's mchirp will be filtered.")
+parser.add_option('', '--match-window-db', help = 'Use the match windows specified in the given database to reduce the number of overlaps computed. This can provide a more fine-tuned match window than that provided by use-simple-window. This cannot be used at the same time as use-simple-window.')
 parser.add_option('', '--save-all-overlaps', action = 'store_true', default = False, help = 'Do not delete the all_overlaps table from the output database before exiting. This table contains the fitting factors for all the injections and templates that were filtered.')
 parser.add_option('-R', '--replace', action = 'store_true', default = False, help = 'If the output database already exists, overwrite it. Default action is not to overwrite, in which case only injections that do not have overlap values calculated in the database will be analyzed.')
 parser.add_option('-T', '--checkpoint-dt', type = 'float', default = numpy.inf, help = 'Number of minutes between checkpoints. Default is infinity, meaning no checkpointing.')
@@ -111,9 +112,35 @@ elif opts.precision.lower() == 'double':
 else:
     raise ValueError, "unrecognized precision %s" %(opts.precision)
 
-# load the param window list
-param_windows = {}
-if opts.match_window_db is not None:
+#
+#   Check for parameter windows
+#
+if opts.match_window_db is not None and opts.simple_window is not None:
+    raise ValueError("Cannot use a match-window-db and a simple-window at " +
+        "the same time. Please choose one, or neither.")
+
+if opts.simple_window is not None:
+    win_settings = opts.simple_window.split(':')
+    try:
+        param, min_jitter, max_jitter = win_settings
+    except ValueError:
+        # max_jitter not specified
+        try:
+            param, min_jitter = win_settings
+            max_jitter = min_jitter
+        except ValueError:
+            # option not configured properly
+            raise ValueError("Simple-window arguments not formatted " +
+                "correctly; see help message.")
+    min_jitter = -1.*float(min_jitter)
+    if abs(min_jitter) > 1.:
+        raise ValueError("Lower bound of simple-window cannot be > 1; " +
+            "see help message.")
+    max_jitter = float(max_jitter)
+    pwin = overlap_utils.ParamWindow(-numpy.inf, numpy.inf)
+    pwin.set_jitter(min_jitter, max_jitter)
+elif opts.match_window_db is not None:
+    param_windows = {}
     connection = sqlite3.connect(opts.match_window_db)
     sqlquery = '''
         SELECT DISTINCT
@@ -130,6 +157,12 @@ if opts.match_window_db is not None:
         pwList.load_from_database(connection, 'mchirp', apprx,
             tmplt_apprx=opts.approximant)
         param_windows[apprx] = pwList
+else:
+    # we'll just create a dummy function that always evaluates to True
+    class DummyWindow:
+        def in_recovered(self, a, b):
+            return True
+    pwin = DummyWindow()
 
 # initialize the workspace
 workSpace = overlap_utils.WorkSpace()
@@ -291,7 +324,7 @@ for fnum, infile in enumerate(filenames):
     # get the injections
     injections = waveform_utils.InjectionDict()
     injections.get_injections(connection, wfmin, archive=archive,
-        calc_f_final=opts.vary_n, estimate_dur=opts.vary_n,
+        calc_f_final=True, estimate_dur=True,
         verbose=opts.verbose)
     injections.clear_sigmas()
     # if vary n, set sort key
@@ -354,13 +387,14 @@ for fnum, infile in enumerate(filenames):
                 sys.stdout.flush()
 
             # check if the template falls within this injection's param window
-            try:
+            if opts.match_window_db is not None:
                 pwList = param_windows[inj.approximant]
                 pwin = pwList[pwList.find(inj.mchirp)]
-                if tmplt.mchirp not in pwin.recovery_window(inj.mchirp):
-                    continue
-            except KeyError:
-                pass
+            # note: if we're not using any windowing, the following will if
+            # statement will always evaluate to False (i.e., filter
+            # everything); see declaration of pwin above for reason
+            if not pwin.in_recovered(inj.mchirp, tmplt.mchirp):
+                continue
 
             # set the segment start time; we'll always make this to be
             # the injection's end_time - 1.5 times its estimated duration
@@ -401,7 +435,8 @@ for fnum, infile in enumerate(filenames):
                 #   The template:
                 if seg_length != last_tmplt_seg_length:
                     if lalsim.SimInspiralImplementedTDApproximants(
-                            lalsim.GetApproximantFromString(tmplt.approximant)):
+                            lalsim.GetApproximantFromString(
+                            tmplt.approximant)):
                         # TD waveform, zero-pad (or generate then zero-pad, if
                         # this is the first instance)
                         if h is None:
@@ -409,9 +444,9 @@ for fnum, infile in enumerate(filenames):
                                 tmplt.min_seg_length, store=False,
                                 reposition=True)
                         # Because we sorted the injections by increasing
-                        # duration, we can simply update the last h used with the
-                        # extra 0's needed; i.e., this only ever increases the size
-                        # of h, it never decreases.
+                        # duration, we can simply update the last h used with
+                        # the extra 0's needed; i.e., this only ever increases
+                        # the size of h, it never decreases.
                         pad_idx = int(tmplt.get_wraparound_dur() / h.delta_t)
                         h = waveform_utils.zero_pad_at_index(h, pad_idx,
                             tmplt.min_sample_rate*seg_length)
