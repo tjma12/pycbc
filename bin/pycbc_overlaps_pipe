@@ -33,13 +33,29 @@ __description__ = 'Writes overlap dag and sub files.'
 #        return name
 #table.StripColumnName = StripColumnName
 
+# for reading xmldocs
+class LIGOLWContentHandler(ligolw.LIGOLWContentHandler):
+    pass
+lsctables.use_in(LIGOLWContentHandler)
+
+# for writing xmldocs
+def create_xmldoc(tables):
+    """
+    Creates an xmldoc from the list of given LIGOLW tables.
+    """
+    xmldoc = ligolw.Document()
+    xmldoc.appendChild(ligolw.LIGO_LW())
+    for table in tables:
+        xmldoc.childNodes[0].appendChild(table)
+    return xmldoc
+
 
 def get_injtmpltDB_filename(output_directory, ifo, tag):
     """
     Function to return the combined injection/tmpltbank database file.
     """
     if ifo is None:
-        ifo = 'RF'
+        ifo = 'ND'
     return '%s/%s-INJECTIONS_TMPLTBANK%s.sqlite' %( output_directory, ifo, tag.startswith('-') and tag or '_'+tag)
 
 
@@ -70,7 +86,6 @@ parser = OptionParser(description = __description__, usage = '%s [options]' % __
 
 parser.add_option('-l', '--log-path', help = 'Location to put log directory. Must not be a NSF mounted file system.')
 parser.add_option('-t', '--node-local-dir', help = "User's local node directory on which to do database work.")
-parser.add_option('-i', '--ifo', help = 'Detector to use for calculating response.')
 parser.add_option('-u', '--user-tag', help = 'Set a user tag to be applied to the dag.')
 parser.add_option('-c', '--config-file', help = 'Get configuration settings from an ini file.')
 parser.add_option('-s', '--start-seed', type = int, help = 'Start seed for the random number generators. Each node that uses a seed argument will increment this by 1.')
@@ -81,7 +96,7 @@ opts, _ = parser.parse_args()
 
 if opts.start_seed is None:
     raise ValueError, "start seed required"
-seed = opts.start_seed - 1
+seed = opts.start_seed
 if not os.path.exists(opts.log_path):
     raise ValueError, "log path not found"
 if not os.path.exists(opts.config_file):
@@ -111,7 +126,10 @@ tempfile.tempdir = '.'
 fh, tempout = tempfile.mkstemp(suffix='.out')
 tempoutf = os.fdopen(fh, 'w')
 
-# set up directories
+# set up pipeline parameters (directories, ifo, etc.)
+ifo = cp.get('pipeline', 'ifo')
+if ifo.upper() == 'NONE':
+    ifo = None
 if not os.path.exists('logs/'):
     os.mkdir('logs/')
 injections_dir = cp.get('pipeline', 'injections-directory')
@@ -188,11 +206,17 @@ if not opts.skip_add_apprx:
     addApprx_job.add_opt('tmp-space', opts.node_local_dir)
 
 # overlaps
+if cp.has_option('overlaps', 'ifo'):
+    raise ValueError('ifo should be set in the [pipeline] section of the ' +\
+        'config file, not in the [overlaps] section')
 add_opts_from_ini(cp, 'overlaps', overlaps_job)
 overlaps_job.add_opt('tmp-space', opts.node_local_dir)
 overlaps_job.add_opt('output-dir', results_dir)
 
 # expectation values
+if cp.has_option('calc_exval', 'ifo'):
+    raise ValueError('ifo should be set in the [pipeline] section of the ' +\
+        'config file, not in the [calc_exval] section')
 add_opts_from_ini(cp, 'calc_exval', exval_job)
 exval_job.add_opt('tmp-space', opts.node_local_dir)
 exval_job.add_opt('output-dir', results_dir)
@@ -210,12 +234,33 @@ injections_per_node = int(cp.get('pipeline', 'injections-per-node'))
 num_inj_nodes = int(numpy.ceil(float(num_injections) / injections_per_node))
 remainder = num_injections % injections_per_node
 
-# create the createInj command template; this will be run once per thread
+#
+#   Run the create_inj program to create the injections
+#
+inj_file_tag = '%sALLINJPTS_%i' %(opts.user_tag is not None and \
+    opts.user_tag+'_' or '', seed)
 inj_cmd = construct_cmd_from_ini(cp, 'create_inj', create_inj_exec)
-# add the desired output directory
-inj_cmd += ' --output-dir %s' % injections_dir
-# add the thread-specific arguments
-inj_cmd += ' --seed %i --n-points %i --user-tag %s' 
+inj_cmd += ' --output-dir %s --seed %i --n-points %i --user-tag %s' %(
+    injections_dir, seed, num_injections, inj_file_tag)
+res = subprocess.call(inj_cmd.split(), stdout=tempoutf, stderr=tempoutf)
+if res != 0:
+    raise ValueError, "Call to %s failed. Command call:\n%s" %(
+        create_inj_exec, inj_cmd)
+
+# load the resulting output file
+inj_outfile = create_injections.get_outfilename(injections_dir, 'HL',
+    user_tag=inj_file_tag, gz=True)
+injdoc = utils.load_filename(inj_outfile, contenthandler=LIGOLWContentHandler,
+    gz=True)
+all_injections = table.get_table(injdoc, 'sim_inspiral')
+# sort by the given parameter if desired
+if cp.has_option('pipeline', 'sort-injections-by'):
+    sort_param = cp.get('pipeline', 'sort-injections-by')
+    all_injections.sort(key=lambda x: getattr(x, sort_param))
+# get the other tables that are in the document
+injdoc_table_names = [y.Name for y in injdoc.childNodes[0].getElements(
+    lambda x: x.tagName == ligolw.Table.tagName) if y.Name != u'sim_inspiral']
+injdoc_tables = [table.get_table(injdoc, x) for x in injdoc_table_names]
 
 # create the combineDBs command templates; this will be run once per thread
 dbs_cmd = construct_cmd_from_ini(cp, 'combine_databases', combine_dbs_exec) 
@@ -234,7 +279,6 @@ if res != 0:
     raise ValueError, "Call to %s failed. Command call:\n%s" %(
         combine_dbs_exec, tmp_db_cmd)
 
-#print "Using inj. command:\n\t%s\nfor each thread" % inj_cmd
 print "Creating threads..."
 exval_nodes = []
 for nn in range(num_inj_nodes):
@@ -246,30 +290,25 @@ for nn in range(num_inj_nodes):
         '', nn)
 
     #
-    #   Run the create_inj program to create the injections
+    #   Create a copy of the injections file that only contains this block
+    #   of injections, along with the other tables in the xml document
     #
-    seed += 1
-    this_tag = '%i%s%s' %( seed, opts.user_tag is None and '-' or '_',
-        thread_tag)
-    # if the last thread, set the number of injections to be the remainder
-    if remainder != 0 and nn == num_inj_nodes-1:
-        n_points = remainder
+    simtable = lsctables.New(lsctables.SimInspiralTable)
+    kstart = nn * injections_per_node
+    if nn+1 == num_inj_nodes and remainder != 0:
+        kend = kstart + remainder
     else:
-        n_points = injections_per_node
-
-    this_cmd = inj_cmd %(seed, n_points, this_tag)
-    res = subprocess.call(this_cmd.split(), stdout=tempoutf, stderr=tempoutf)
-    if res != 0:
-        raise ValueError, "Call to %s failed. Command call:\n%s" %(
-            create_inj_exec, this_cmd)
-
+        kend = kstart + injections_per_node
+    map(simtable.append, all_injections[kstart:kend])
+    xmldoc = create_xmldoc(injdoc_tables + [simtable]) 
     inj_outfile = create_injections.get_outfilename(injections_dir, 'HL',
-        user_tag=this_tag, gz=True)
+        user_tag=thread_tag, gz=True)
+    utils.write_filename(xmldoc, inj_outfile, gz=True)
 
     #
     #   Create a database with the injections and the templates
     #
-    db_outfile = get_injtmpltDB_filename(inputdbs_dir, opts.ifo, thread_tag)
+    db_outfile = get_injtmpltDB_filename(inputdbs_dir, ifo, thread_tag)
     # copy the temp database containing the template bank to the right name
     shutil.copyfile(tmp_db, db_outfile)
     shutil.copymode(tmp_db, db_outfile)
@@ -318,7 +357,7 @@ for nn in range(num_inj_nodes):
         thread_tag)
     overlaps_node.add_var_opt('user-tag', this_tag)
     overlaps_node.add_file_arg(randDists_node.get_output_files()[0])
-    outfile = overlap_utils.get_outfilename(results_dir, opts.ifo,
+    outfile = overlap_utils.get_outfilename(results_dir, ifo,
         user_tag = this_tag,
         num = 0)
     overlaps_node.add_output_file(outfile)
@@ -339,7 +378,7 @@ for nn in range(num_inj_nodes):
         thread_tag)
     exval_node.add_var_opt('user-tag', this_tag)
     exval_node.add_file_arg(overlaps_node.get_output_files()[0])
-    outfile = overlap_utils.get_exval_outfilename(results_dir, opts.ifo,
+    outfile = overlap_utils.get_exval_outfilename(results_dir, ifo,
         user_tag = this_tag,
         num = 0)
     exval_node.add_output_file(outfile)
