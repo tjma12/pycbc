@@ -903,10 +903,17 @@ class Waveform(object):
 #
 class Template(Waveform):
 
-    # we add a tmplt_id for indexing and wraparound_dur to keep track of
+    # We add a tmplt_id for indexing and wraparound_dur to keep track of
     # how much of the template is wrapped around to the start of a segment.
     # This is useful for zero-padding the template.
-    __slots__ = Waveform.__slots__ + ['tmplt_id', '_wraparound_dur']
+    # We also add a dictionary to store weights.
+    __slots__ = Waveform.__slots__ + ['tmplt_id', 'weights', '_wraparound_dur']
+
+    def __init__(self, **kwargs):
+        super(Template, self).__init__(**kwargs)
+        # make sure weights is a dictionary
+        if self.weights is None:
+            self.weights = {}
 
     def get_wraparound_dur(self):
         """
@@ -1328,7 +1335,8 @@ class Injection(Waveform):
             if store and (self._archive is None or self._archive_id is None):
                 raise ValueError, "In order to store the waveform, an "+\
                     "archive and archive_id must be set."
-            approximant = lalsim.GetApproximantFromString(str(self.approximant))
+            approximant = lalsim.GetApproximantFromString(
+                str(self.approximant))
             if lalsim.SimInspiralImplementedTDApproximants(approximant):
                 h = self.get_td_waveform(sample_rate, segment_length,
                         ifo, segment_start, store=False,

@@ -110,9 +110,11 @@ for fnum, infile in enumerate(filenames):
 
         # get the psd and needed workspace vectors
         if opts.asd_file is not None:
-            psd = workSpace.get_psd_from_file(df, wFmin, sample_rate, opts.asd_file)
+            psd = workSpace.get_psd_from_file(wfmin, sample_rate,
+                seg_length, opts.asd_file, dyn_range_exp=0)
         else:
-            psd = workSpace.get_psd(df, wFmin, sample_rate, psd_model)
+            psd = workSpace.get_psd(wfmin, sample_rate, seg_length,
+                psd_model, dyn_range_exp=0)
 
         # calculate sigma
         sigma = filter.sigma(htilde, psd, oFmin)

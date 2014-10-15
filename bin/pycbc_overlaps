@@ -41,15 +41,16 @@ parser.add_option('-r', '--sample-rate', type = 'int', help = "Required. Sample 
 parser.add_option('-l', '--segment-length', type = 'int', help = "Segment length to use (in s). Must be a power of 2. Required if vary-n not used.")
 parser.add_option('-n', '--vary-n', action='store_true', default=False, help='If turned on, the sample rate and segment length used will be set to the smallest possible value between a given template and injection. This speeds up overlap calculations, but may reduce the accuracy of the effectualness measurement.')
 parser.add_option('-P', '--precision', metavar="[double|single]", default='double', help="What precision to use. Options are 'double' or 'single'. Default is double.")
-parser.add_option('-D', '--dyn-range-exp', type=int, default=None, help="What power to use for the dynamic range factor, which = 2**dyn_range_exp. This is necessary if using single precision. Default is %i." %(int(numpy.log2(pycbc.DYN_RANGE_FAC))))
+parser.add_option('-D', '--dyn-range-exp', type=int, default=int(numpy.log2(pycbc.DYN_RANGE_FAC)), help="What power to use for the dynamic range factor, which = 2**dyn_range_exp. This is necessary if using single precision. Default is %i." %(int(numpy.log2(pycbc.DYN_RANGE_FAC))))
 parser.add_option('-i', '--ifo', help = "What ifo to inject into. If none specified, no response function will be applied to the injections.")
 parser.add_option('-U', '--user-tag', help = "User tag to add to all Overlap files.")
-parser.add_option('-M', '--use-injection-cache', metavar = '"memory" or "disk"', help = "Speed up calculations by using an injection cache. Options are 'memory' or 'disk'. If 'memory', all injections will be stored in memory. If 'disk', injections will be stored to a temporary h5py archive. If a temp-space is specified, this temporary archive will be placed there; otherwise, it will be created in the current working directory.")
+parser.add_option('-M', '--use-injection-cache', metavar = '"memory" or "disk"', help = "Speed up calculations by using an injection cache. Options are 'memory' or 'disk'. If 'memory', all injections will be stored in memory. If 'disk', injections will be stored to a temporary hdf5 archive. If a temp-space is specified, this temporary archive will be placed there; otherwise, it will be created in the current working directory.")
 parser.add_option('-a', '--approximant', help = "Approximant to use for the templates.")
 parser.add_option("", "--amp-order", type=int, default=0, help="Amplitude order to use for templates. Default is 0.")
 parser.add_option("", "--phase-order", type=int, default=7, help="Phase order to use for templates. Default is 7 (3.5PN).")
 parser.add_option("", "--spin-order", type=int, default=None, help="Spin order to use for templates.")
 parser.add_option("", "--taper", help = "For TD approximants, set whether or not to taper the templates at the start and/or end. Options are: start, end, start_end. If not specified, no tapering will be done.")
+parser.add_option("", "--apply-weights", metavar="WEIGHT1[,WEIGHT2,...]", default="uniform", help="Apply a weight to a template when maximizing the overlap of an injection over the bank. Options are %s. Default is uniform. To specify more than one weight, separate the weights by commas. A separate maximization will be performed for each weight specified. The name of the weight associated with each maximization is stored in the description column of the coinc_definer table." %(', '.join(overlap_utils.weight_functions.keys())))
 parser.add_option('', '--simple-window', metavar='PARAM:LOWER[:UPPER]', help="Only filter templates that lie within the given fractional range of the given parameter of an injection. LOWER must be < 1. If an UPPER is not specified, the LOWER fractional range will be used. For example, if set to mchirp:0.2, only templates that have an mchirp within +/-0.2 of an injection's mchirp will be filtered with that injection. If set to mchirp:0.2:0.5, templates with an mchirp [- 0.2, +0.5] * the injection's mchirp will be filtered.")
 parser.add_option('', '--match-window-db', help = 'Use the match windows specified in the given database to reduce the number of overlaps computed. This can provide a more fine-tuned match window than that provided by use-simple-window. This cannot be used at the same time as use-simple-window.')
 parser.add_option('', '--save-all-overlaps', action = 'store_true', default = False, help = 'Do not delete the all_overlaps table from the output database before exiting. This table contains the fitting factors for all the injections and templates that were filtered.')
@@ -99,10 +100,7 @@ if (opts.use_injection_cache is not None and not
         'be set to "disk" or "memory"')
 taper = waveform_utils.get_taper_string(opts.taper)
 
-if opts.dyn_range_exp is None:
-    dyn_range_fac = pycbc.DYN_RANGE_FAC
-else:
-    dyn_range_fac = 2.**opts.dyn_range_exp
+dyn_range_fac = 2.**opts.dyn_range_exp
 if opts.precision.lower() == 'single':
     real_type = pytypes.float32
     cmplx_type = pytypes.complex64
@@ -111,6 +109,14 @@ elif opts.precision.lower() == 'double':
     cmplx_type = pytypes.complex128
 else:
     raise ValueError, "unrecognized precision %s" %(opts.precision)
+
+# parse weights
+weight_functions = map(str.lower, map(str.strip,
+    opts.apply_weights.split(',')))
+for weight_func in weight_functions:
+    if weight_func not in overlap_utils.weight_functions:
+        raise ValueError("unrecognized weight %s; options are %s" %(
+            weight_func, ', '.join(overlap_utils.weight_functions.keys())))
 
 #
 #   Check for parameter windows
@@ -176,10 +182,6 @@ last_subkeylen = 0
 # set a temp path for backup files
 tmp_path = opts.tmp_space is not None and opts.tmp_space or '.'
 
-# get the psd model to use
-if opts.asd_file is None:
-    psd_model = opts.psd_model
-
 for fnum, infile in enumerate(filenames):
 
     if opts.verbose:
@@ -228,6 +230,9 @@ for fnum, infile in enumerate(filenames):
     # create a table to store all of the overlaps;
     # we will delete this when done
     overlap_utils.create_all_results_table(connection)
+    # ditto the template weight table
+    overlap_utils.create_tmplt_weights_table(connection)
+
     
     # create the log table for checkpointing
     overlap_utils.create_log_table(connection)
@@ -266,8 +271,8 @@ for fnum, infile in enumerate(filenames):
 
         # get the starting index
         start_idx = startup_dict['tmplt_num']
-        # we add one to the injection index because the checkpoint always happens
-        # after the injection was analyzed
+        # we add one to the injection index because the checkpoint always
+        # happens after the injection was analyzed
         start_inj_idx = startup_dict['inj_num'] + 1
 
     else:
@@ -311,8 +316,10 @@ for fnum, infile in enumerate(filenames):
     # order the templates by duration, sample_rate
     templates.set_sort_key(['duration', 'f_final'])
 
-    # check that the tmplt_id matches
-    if startup_dict and startup_dict['tmplt_id'] is not None:
+    # check that the tmplt_id matches; we only do this if we will be continuing
+    # with filtering
+    if startup_dict and not startup_dict["finished_filtering"] and \
+            startup_dict['tmplt_id'] is not None:
         check_tid = templates.as_list[start_idx].tmplt_id
         if startup_dict['tmplt_id'] != check_tid:
             raise ValueError("starting tmplt_id-1 (%s) " %(check_tid) +\
@@ -332,7 +339,8 @@ for fnum, infile in enumerate(filenames):
         injections.set_sort_key(['duration', 'f_final'])
 
     # check that the simulation_id matches
-    if startup_dict and startup_dict['simulation_id'] is not None:
+    if startup_dict and not startup_dict["finished_filtering"] and \
+            startup_dict['simulation_id'] is not None:
         check_id = str(injections.as_list[start_inj_idx - 1].simulation_id)
         if startup_dict['simulation_id'] != check_id:
             raise ValueError("starting simulation_id (%s) " %(check_id) +\
@@ -363,11 +371,28 @@ for fnum, infile in enumerate(filenames):
     #       Cycle over the templates
     #
     #
+
+    # if we had finished filtering on the last checkpoint, we'll just skip
+    # this section by making the start_idx be the same as the length as the
+    # templates list
+    if startup_dict == {}:
+        finished_filtering = False
+    else:
+        finished_filtering = startup_dict["finished_filtering"]
+    if finished_filtering:
+        start_idx = len(templates.as_list)
+
     for jj in range(start_idx, len(templates.as_list)):
 
         tmplt = templates.as_list[jj]
         h = htilde = None
         last_tmplt_seg_length = 0
+
+        # speed-up: if just applying no_anti_aligned weight, and this is an
+        # anti-aligned template, just skip now
+        if weight_functions == ['no_anti_aligned'] and \
+                overlap_utils.noAntiAligned(tmplt) == 0.:
+            continue
 
         #
         #
@@ -501,11 +526,12 @@ for fnum, infile in enumerate(filenames):
             #   Get the PSD and needed workspace vectors
             #
             if opts.asd_file is not None:
-                psd = workSpace.get_psd_from_file(df, wfmin, sample_rate,
-                    opts.asd_file, dyn_range_fac=dyn_range_fac)
+                psd = workSpace.get_psd_from_file(wfmin, sample_rate,
+                    seg_length, opts.asd_file,
+                    dyn_range_exp=opts.dyn_range_exp)
             else:
-                psd = workSpace.get_psd(df, wfmin, sample_rate, psd_model,
-                    dyn_range_fac=dyn_range_fac)
+                psd = workSpace.get_psd(wfmin, sample_rate, seg_length,
+                    opts.psd_model, dyn_range_exp=opts.dyn_range_exp)
             psd = psd.astype(real_type)
 
             # get work vectors
@@ -523,7 +549,7 @@ for fnum, infile in enumerate(filenames):
             else:
                 work_v1 = work_v2 = work_psd = None
 
-            # get the normalization of htilde, htildeprime if they aren't known yet
+            # get the normalization of htilde, htildeprime if they aren't known
             if inj.sigma is None:
                 inj.sigma = filter.sigma(htildeprime, psd[:len(htildeprime)],
                     ofmin)
@@ -533,7 +559,8 @@ for fnum, infile in enumerate(filenames):
             #
             #   Compute effectualness
             #
-            cmplx_ts, _, norm, maxidx, offset, _ = overlap_utils.filter_by_resampling(
+            cmplx_ts, _, norm, maxidx, offset, _ = \
+                overlap_utils.filter_by_resampling(
                 htilde, htildeprime, psd, ofmin, target_sample_rate,
                 max_resample_length=2, h_norm=tmplt.sigma**2, out=out_work_mem,
                 corr_out=corr_work_mem, zero_pad_to_common_Nyquist=opts.vary_n,
@@ -547,6 +574,19 @@ for fnum, infile in enumerate(filenames):
 
             time_offset = segment_start + maxidx*cmplx_ts.delta_t + offset - \
                 inj.geocent_time
+
+            # calculate weight for this template if it hasn't been done yet
+            if tmplt.weights == {}:
+                for weight_func in weight_functions:
+                    weight = \
+                        overlap_utils.weight_functions[weight_func](
+                            tmplt, ofmin, psd_model=opts.psd_model,
+                            asd_file=opts.asd_file, workspace=workSpace,
+                            use_tmplt_sigma=True)
+                    tmplt.weights[weight_func] = weight 
+                    overlap_utils.add_tmplt_weight(connection,
+                        tmplt.tmplt_id, weight_func, weight)
+
 
             # store
             thisResult = overlap_utils.OverlapResult(tmplt, inj)
@@ -566,11 +606,11 @@ for fnum, infile in enumerate(filenames):
                 if opts.verbose:
                     print >> sys.stdout, "\ncheckpointing..."
                     sys.stdout.flush()
-                # FIXME: never backing up archive
+                # Note: never backing up archive
                 archive = overlap_utils.checkpoint(connection, opts.output_dir,
                     archive, now, str(inj.simulation_id), ii,
-                    str(tmplt.tmplt_id), jj, getpass.getuser(),
-                    backup_archive=False)
+                    str(tmplt.tmplt_id), jj, finished_filtering,
+                    getpass.getuser(), backup_archive=False)
                 if working_filename is not None:
                     # to avoid copy errors, we need to move the database over
                     # then move it back
@@ -586,23 +626,52 @@ for fnum, infile in enumerate(filenames):
     #
     #   Best Match Calculations
     #
-    # done cycling over templates, find the best match for each injection
-    if opts.verbose:
-        print >> sys.stdout, "\nFinding best match and calculating " +\
-            "expectation values:"
 
-    # get the points that have already been written to overlap_results
-    # XXX: start here
+    # I don't have a good way to checkpoint this, but it should be
+    # fairly quick. So we'll just force a checkpoint here, and assume that
+    # the rest of the program can finish before the next checkpoint.
+    # note that we set finished_filtering to True here
+    if not finished_filtering:
+        finished_filtering = True
+        now = time.time()
+        if opts.verbose:
+            print >> sys.stdout, "\ncheckpointing..."
+            sys.stdout.flush()
+        archive = overlap_utils.checkpoint(connection, opts.output_dir,
+            archive, now, str(injections.as_list[-1].simulation_id),
+            len(injections.as_list)-1, str(templates.as_list[-1].tmplt_id),
+            len(templates.as_list)-1, finished_filtering, getpass.getuser(),
+            backup_archive=False)
+        if working_filename is not None:
+            # to avoid copy errors, we need to move the database over
+            # then move it back
+            dbtables.put_connection_filename(outfile, working_filename,
+                verbose=False)
+            working_filename = dbtables.get_connection_filename(outfile,
+                tmp_path = opts.tmp_space, verbose=False)
+            connection = sqlite3.connect(working_filename)
+            dbtables.set_temp_store_directory(connection, opts.tmp_space,
+                verbose=False)
+        last_time = now
+
+    if opts.verbose:
+        print >> sys.stdout, "\nFinding best match:"
+
     best_match_query = """
         SELECT
-            a.simulation_id, a.tmplt_id, a.effectualness, a.time_offset,
-            a.time_offset_ns, a.segment_length, a.sample_rate
+            a.simulation_id, a.tmplt_id, a.effectualness, w.weight,
+            a.time_offset, a.time_offset_ns, a.segment_length, a.sample_rate
         FROM
             all_results AS a
+        JOIN
+            tmplt_weights AS w
+        ON
+            w.tmplt_id == a.tmplt_id
         WHERE
-            a.simulation_id == ?
+            a.simulation_id == ? AND
+            w.weight_function == ?
         ORDER BY
-            effectualness
+            a.effectualness * w.weight
         DESC LIMIT 1"""
 
     for ii, inj in enumerate(injections.as_list):
@@ -612,47 +681,35 @@ for fnum, infile in enumerate(filenames):
             sys.stdout.flush()
     
 
-        # get the best match for this injection
-        simid, tmpltid, eff, dt, dt_ns, seg_length, sample_rate = \
-            connection.cursor().execute(best_match_query,
-            (str(inj.simulation_id),)).fetchone()
+        for weight_func in weight_functions:
+            # get the best match for this injection
+            result = connection.cursor().execute(best_match_query,
+                (str(inj.simulation_id), weight_func)).fetchone()
+            if result is None:
+                raise ValueError("Injection %s " %(inj.simulation_id) +\
+                    "was not filtered with any template. This happens when " +\
+                    "the windowing used is too small. Either remove the " +\
+                    "injection from the output database (%s) " %(outfile) +\
+                    "and re-run (make sure --replace is not on) or use a " +\
+                    "larger window and re-run the entire job (with either " +\
+                    "--replace on, or with a different user-tag).")
+            simid, tmpltid, eff, wt, dt, dt_ns, seg_length, sample_rate = \
+                result
 
-        bestMatch = overlap_utils.OverlapResult(templates[tmpltid],
-            injections[simid])
-        bestMatch.effectualness = eff
-        bestMatch.time_offset = dt
-        bestMatch.time_offset_ns = dt_ns
-        bestMatch.segment_length = seg_length
-        bestMatch.sample_rate = sample_rate
-        bestMatch.overlap_f_min = ofmin 
-        bestMatch.waveform_f_min = wfmin
-        bestMatch.tmplt_approximant = opts.approximant 
-      
-        overlap_utils.write_result_to_database(connection, bestMatch,
-            'no_weight', this_process)
-
-        # check time and update checkpoints if needed
-        now = time.time()
-        if (now - last_time)/60. > opts.checkpoint_dt:
-            if opts.verbose:
-                print >> sys.stdout, "\ncheckpointing..."
-                sys.stdout.flush()
-            archive = overlap_utils.checkpoint(connection, opts.output_dir,
-                archive, now, str(injections.as_list[-1].simulation_id),
-                len(injections.as_list)-1, str(templates.as_list[-1].tmplt_id),
-                len(templates.as_list)-1, getpass.getuser(),
-                backup_archive=False)
-            if working_filename is not None:
-                # to avoid copy errors, we need to move the database over
-                # then move it back
-                dbtables.put_connection_filename(outfile, working_filename,
-                    verbose=False)
-                working_filename = dbtables.get_connection_filename(outfile,
-                    tmp_path = opts.tmp_space, verbose=False)
-                connection = sqlite3.connect(working_filename)
-                dbtables.set_temp_store_directory(connection, opts.tmp_space,
-                    verbose=False)
-            last_time = now
+            bestMatch = overlap_utils.OverlapResult(templates[tmpltid],
+                injections[simid])
+            bestMatch.effectualness = eff
+            bestMatch.weight = wt
+            bestMatch.time_offset = dt
+            bestMatch.time_offset_ns = dt_ns
+            bestMatch.segment_length = seg_length
+            bestMatch.sample_rate = sample_rate
+            bestMatch.overlap_f_min = ofmin 
+            bestMatch.waveform_f_min = wfmin
+            bestMatch.tmplt_approximant = opts.approximant 
+          
+            overlap_utils.write_result_to_database(connection, bestMatch,
+                weight_func, this_process)
 
     if opts.verbose:
         print >> sys.stdout, ""

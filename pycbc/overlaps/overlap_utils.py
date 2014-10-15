@@ -3,6 +3,7 @@
 import sqlite3
 import numpy
 import os, sys, shutil, socket
+import copy
 import tempfile
 import pickle
 import h5py
@@ -406,6 +407,274 @@ def filter_by_resampling(htilde, stilde, psd, fmin, target_sample_rate,
 
 
 #
+#   Weight functions
+#
+def uniform(*args, **kwargs):
+    """
+    Just returns 1, regardless of what arguments are passed.
+    """
+    return 1.
+
+
+def noAntiAligned(tmplt, *args, **kwargs):
+    """
+    Returns 0 if either z-component of the template's spins are < 0. Otherwise
+    returns 1.
+    """
+    if tmplt.spin1z < 0 or tmplt.spin2z < 0:
+        return 0.
+    else:
+        return 1.
+
+def weight_by_volume(tmplt, tmplt_prime, use_tmplt_sigma=False,
+        use_tmplt_prime_sigma=False, fmin=None, psd_model=None, asd_file=None,
+        workspace=None):
+    """
+    Generates the weight: 
+
+        w   = V / V'
+            = (\sigma / \sigma')^3
+            = (<h, h> / <h', h'>)^(3/2),
+
+    where h is the waveform associated with the given tmplt and h' is the
+    waveform associated with the given tmplt_prime.
+
+    When calculating sigmas, the minimum possible sample rate and segment
+    length for h_tmplt and h' will be used. For this reason, the PSD is
+    generated on the fly so as to ensure proper frequency resolution and
+    Nyquist frequencies for each.
+
+    Parameters
+    ----------
+    tmplt: waveform_utils.Template
+        The template used in the numerator.
+    tmplt_prime: waveform_utils.Template
+        The template used in the denominator.
+    use_tmplt_sigma: bool
+        If set to True, the sigma property of tmplt will be used for sigma.
+        Otherwise, sigma is calculated. Default is False.
+    use_tmplt_prime_sigma: bool
+        If set to True, the sigma property of tmplt_prime will be used for
+        sigma'. Otherwise, sigma' is calculated. Default is False.
+    fmin: float
+        The starting frequency to use for the overlaps. Needed if
+        either use_tmplt_sigma or use_tmplt_prime_sigma is False.
+    psd_model: {None, string}
+        The name of the PSD model to use when calculating sigma and/or sigma'.
+    asd_file: {None, string}
+        The name of the asd file to use from which to get the PSD. Either this
+        or psd_model must be specified if sigma or sigma' need to be
+        calculated.
+    workspace: {None, WorkSpace}
+        Optional. Provide a workspace instance from which to retrieve the PSD.
+        If the PSD with the correct sample rate and segment length exists in
+        the work space, it will be retrieved instead of being generated.
+        Otherwise, the psd will be generated and stored to the workspace when
+        calculating sigma and/or sigma'.
+
+    Returns
+    -------
+    weight: float
+        The weight to use.
+    """
+    if not (use_tmplt_sigma and use_tmplt_prime_sigma):
+        if psd_model is None and asd_file is None:
+            raise ValueError("must provide either a psd_model or asd_file " +
+                "to use")
+        if workspace is None:
+            # generate a temporary workspace
+            workspace = WorkSpace()
+
+    # get sigma
+    if use_tmplt_sigma: 
+        if tmplt.sigma is None:
+            raise ValueError("tmplt's sigma property must be populated when "+
+                "use_tmplt_sigma is True")
+        sigma = tmplt.sigma
+    else:
+        htilde = tmplt.get_fd_waveform(tmplt.min_sample_rate,
+            tmplt.min_seg_length, store=False) 
+        if psd_model is not None:
+            psd = workspace.get_psd(tmplt.f_min, tmplt.min_sample_rate,
+                tmplt.min_seg_length, psd_model, dyn_range_exp=0)
+        else:
+            psd = workspace.get_psd_from_file(tmplt.f_min,
+                tmplt.min_sample_rate, tmplt.min_seg_length, asd_file,
+                dyn_range_exp=0) 
+        sigma = filter.sigma(htilde, psd, fmin) 
+
+    # get sigma'
+    if use_tmplt_prime_sigma: 
+        if tmplt_prime.sigma is None:
+            raise ValueError("tmplt_prime's sigma property must be populated "+
+                "when use_tmplt_prime_sigma is True")
+        sigma_prime = tmplt_prime.sigma
+    else:
+        htilde_prime = tmplt_prime.get_fd_waveform(tmplt_prime.min_sample_rate,
+            tmplt_prime.min_seg_length, store=False)
+        if psd_model is not None:
+            psd = workspace.get_psd(tmplt_prime.f_min,
+                tmplt_prime.min_sample_rate, tmplt_prime.min_seg_length,
+                psd_model, dyn_range_exp=0)
+        else:
+            psd = workspace.get_psd_from_file(tmplt_prime.f_min,
+                tmplt_prime.min_sample_rate, tmplt_prime.min_seg_length,
+                asd_file, dyn_range_exp=0) 
+        sigma_prime = filter.sigma(htilde_prime, psd, fmin)
+
+    return (sigma / sigma_prime)**3.
+
+
+def equalMassVol(tmplt, fmin, psd_model=None, asd_file=None, workspace=None,
+        use_tmplt_sigma=False):
+    """
+    Calls weight_by_volume with tmplt set to the given tmplt and tmplt_prime
+    set to a template with the same total mass as tmplt, but with the
+    component masses equal.
+
+    Parameters
+    ----------
+    tmplt: waveform_utils.Template
+        The template for which to calculate the weight.
+    fmin: float
+        Required. The starting frequency to use for the overlaps.
+    psd_model: {None, string}
+        The name of the PSD model to use when calculating sigma.
+    asd_file: {None, string}
+        The name of the asd file to use from which to get the PSD. Either this
+        or psd_model must be specified.
+    workspace: {None, WorkSpace}
+        Optional. Provide a workspace instance from which to retrieve the PSD.
+        If the PSD with the correct sample rate and segment length exists in
+        the work space, it will be retrieved instead of being generated.
+        Otherwise, the psd will be generated and stored to the workspace.
+    use_tmplt_sigma: bool
+        If set to True, the sigma property of tmplt will be used for sigma.
+        Otherwise, sigma is calculated. Default is False.
+
+    Returns
+    -------
+    weight: float
+        The weight to use.
+    """
+    # copy the template and set the masses to equal
+    tmplt_prime = copy.deepcopy(tmplt)
+    tmplt_prime.mass1 = tmplt_prime.mass2 = tmplt.mtotal/2.
+    tmplt_prime.set_f_final()
+
+    return weight_by_volume(tmplt, tmplt_prime,
+        use_tmplt_sigma=use_tmplt_sigma, use_tmplt_prime_sigma=False,
+        fmin=fmin, psd_model=psd_model, asd_file=asd_file,
+        workspace=workspace)
+
+
+def nonSpinVol(tmplt, fmin, psd_model=None, asd_file=None, workspace=None,
+        use_tmplt_sigma=False):
+    """
+    Calls weight_by_volume with tmplt set to the given tmplt and tmplt_prime
+    set to a template with the same component masses as the given
+    template, but with all components of the spin set to 0.
+
+    Parameters
+    ----------
+    tmplt: waveform_utils.Template
+        The template for which to calculate the weight.
+    fmin: float
+        The starting frequency to use for the overlaps.
+    psd_model: {None, string}
+        The name of the PSD model to use when calculating sigma.
+    asd_file: {None, string}
+        The name of the asd file to use from which to get the PSD. Either this
+        or psd_model must be specified.
+    workspace: {None, WorkSpace}
+        Optional. Provide a workspace instance from which to retrieve the PSD.
+        If the PSD with the correct sample rate and segment length exists in
+        the work space, it will be retrieved instead of being generated.
+        Otherwise, the psd will be generated and stored to the workspace.
+    use_tmplt_sigma: bool
+        If set to True, the sigma property of tmplt will be used for sigma.
+        Otherwise, sigma is calculated. Default is False.
+
+    Returns
+    -------
+    weight: float
+        The weight to use.
+    """
+    # copy the template and set the spins to 0
+    tmplt_prime = copy.deepcopy(tmplt)
+    tmplt_prime.spin1x = tmplt_prime.spin2x \
+        = tmplt_prime.spin1y = tmplt_prime.spin2y \
+        = tmplt_prime.spin1z = tmplt_prime.spin2z \
+        = 0.
+    tmplt_prime.set_f_final()
+
+    return weight_by_volume(tmplt, tmplt_prime,
+        use_tmplt_sigma=use_tmplt_sigma, use_tmplt_prime_sigma=False,
+        fmin=fmin, psd_model=psd_model, asd_file=asd_file,
+        workspace=workspace)
+
+
+def equalMassNonSpinVol(tmplt, fmin, psd_model=None, asd_file=None,
+        workspace=None, use_tmplt_sigma=False):
+    """
+    Calls weight_by_volume with tmplt set to the given tmplt and tmplt_prime
+    set to a template with the same total mass as the given template, but
+    with equal component masses and with all components of the spin set to 0.
+
+    Parameters
+    ----------
+    tmplt: waveform_utils.Template
+        The template for which to calculate the weight.
+    fmin: float
+        The starting frequency to use for the overlaps.
+    psd_model: {None, string}
+        The name of the PSD model to use when calculating sigma.
+    asd_file: {None, string}
+        The name of the asd file to use from which to get the PSD. Either this
+        or psd_model must be specified.
+    workspace: {None, WorkSpace}
+        Optional. Provide a workspace instance from which to retrieve the PSD.
+        If the PSD with the correct sample rate and segment length exists in
+        the work space, it will be retrieved instead of being generated.
+        Otherwise, the psd will be generated and stored to the workspace.
+    use_tmplt_sigma: bool
+        If set to True, the sigma property of tmplt will be used for sigma.
+        Otherwise, sigma is calculated. Default is False.
+
+    Returns
+    -------
+    weight: float
+        The weight to use.
+    """
+    # copy the template and set the masses to equal, spins to 0.
+    tmplt_prime = copy.deepcopy(tmplt)
+    tmplt_prime.mass1 = tmplt_prime.mass2 = tmplt.mtotal/2.
+    tmplt_prime.spin1x = tmplt_prime.spin2x \
+        = tmplt_prime.spin1y = tmplt_prime.spin2y \
+        = tmplt_prime.spin1z = tmplt_prime.spin2z \
+        = 0.
+    tmplt_prime.set_f_final()
+
+    return weight_by_volume(tmplt, tmplt_prime,
+        use_tmplt_sigma=use_tmplt_sigma, use_tmplt_prime_sigma=False,
+        fmin=fmin, psd_model=psd_model, asd_file=asd_file,
+        workspace=workspace)
+
+
+#
+#   dictionary to map lables to weight functions
+#
+weight_functions = {
+    "uniform": uniform,
+    "no_anti_aligned": noAntiAligned,
+    "equal_mass_vol": equalMassVol,
+    "non_spin_vol": nonSpinVol,
+    "equal_mass_non_spin_vol": equalMassNonSpinVol
+}
+
+
+
+#
 #   Standard file names
 #
 def get_outfilename(output_directory, ifo, user_tag=None, num=None):
@@ -494,24 +763,28 @@ class WorkSpace:
         self.corr_vecs = {}
         self.work_FS_vecs = {}
 
-    def get_psd(self, df, fmin, sample_rate, psd_model, dyn_range_fac=1.):
-        N = int(sample_rate/df)
+    def get_psd(self, fmin, sample_rate, segment_length, psd_model,
+            dyn_range_exp=0):
         try:
-            return self.psds[N, sample_rate]
+            return self.psds[psd_model, sample_rate, segment_length,
+                dyn_range_exp]
         except KeyError:
-            self.psds[N, sample_rate] = \
-                getattr(pyPSD, psd_model)(N/2 + 1, df, fmin)*dyn_range_fac**2.
-            return self.psds[N, sample_rate]
+            self.psds[psd_model, sample_rate, segment_length, dyn_range_exp] =\
+                getattr(pyPSD, psd_model)((segment_length*sample_rate)/2 + 1,
+                    1./segment_length, fmin) * 2.**(2*dyn_range_exp)
+            return self.psds[psd_model, sample_rate, segment_length]
 
-    def get_psd_from_file(self, df, fmin, sample_rate, filename,
-            is_asd_file=True, dyn_range_fac=1.):
-        N = int(sample_rate/df)
+    def get_psd_from_file(self, fmin, sample_rate, segment_length, filename,
+            is_asd_file=True, dyn_range_exp=0):
         try:
-            return self.psds[N, sample_rate]
+            return self.psds[filename, sample_rate, segment_length,
+                dyn_range_exp]
         except KeyError:
-            self.psds[N, sample_rate] = pyPSD.from_txt(filename, N/2 + 1, df,
-                fmin, is_asd_file)*dyn_range_fac**2.
-            return self.psds[N, sample_rate]
+            self.psds[filename, sample_rate, segment_length, dyn_range_exp] =\
+                pyPSD.from_txt(filename, (sample_rate*segment_length)/2+1,
+                1./segment_length, fmin, is_asd_file) * 2.**(2*dyn_range_exp)
+            return self.psds[filename, sample_rate, segment_length,
+                dyn_range_exp]
 
     def clear_psds(self):
         self.psds.clear()
@@ -682,7 +955,7 @@ class OverlapResult:
     params = ['ifo', 'effectualness', 'snr', 'chisq', 'new_snr', 'chisq_dof',
         'time_offset', 'time_offset_ns', 'snr_std', 'chisq_std', 'new_snr_std',
         'num_tries', 'num_successes', 'sample_rate', 'segment_length',
-        'tmplt_approximant', 'overlap_f_min', 'waveform_f_min']
+        'tmplt_approximant', 'overlap_f_min', 'waveform_f_min', 'weight']
     __slots__ = params + ['template', 'injection']
     
     def __init__(self, template, injection):
@@ -829,6 +1102,27 @@ def create_results_table(connection):
         """])
     connection.cursor().executescript(sqlquery)
 
+
+def create_tmplt_weights_table(connection):
+    sqlquery = """
+        CREATE TABLE IF NOT EXISTS
+            tmplt_weights (tmplt_id, weight_function, weight);
+        CREATE INDEX IF NOT EXISTS
+            tw_tid_idx
+        ON
+            tmplt_weights (tmplt_id);
+        """
+    connection.cursor().executescript(sqlquery)
+
+
+def add_tmplt_weight(connection, tmplt_id, weight_func, weight):
+    connection.cursor().execute("""
+        INSERT INTO tmplt_weights
+            (tmplt_id, weight_function, weight)
+        VALUES
+            (?, ?, ?)""", (str(tmplt_id), weight_func, weight))
+
+
 ############################
 #
 #   FIXME: The following should be moved to ligolw_sqlutils
@@ -878,7 +1172,8 @@ def create_log_table(connection):
     sqlquery = """
         CREATE TABLE IF NOT EXISTS
             joblog (time, simulation_id, inj_num, tmplt_id, tmplt_num,
-                pickle_file, backup_archive, scratch_archive, host, username)
+                finished_filtering, backup_archive, scratch_archive, host,
+                username)
         """
     connection.cursor().execute(sqlquery)
     connection.commit()
@@ -887,7 +1182,7 @@ def create_log_table(connection):
 def get_startup_data(connection):
     sqlquery = """
         SELECT
-            simulation_id, inj_num, tmplt_id, tmplt_num, pickle_file,
+            simulation_id, inj_num, tmplt_id, tmplt_num, finished_filtering,
             backup_archive, scratch_archive, host, username
         FROM
             joblog
@@ -895,12 +1190,12 @@ def get_startup_data(connection):
             time
         DESC LIMIT 1"""
     startup_dict = {}
-    for sim_id, inj_num, tmplt_id, tmplt_num, pickle_file, backup_archive, scratch_arxiv, host, username in connection.cursor().execute(sqlquery):
+    for sim_id, inj_num, tmplt_id, tmplt_num, finished_filtering, backup_archive, scratch_arxiv, host, username in connection.cursor().execute(sqlquery):
         startup_dict['simulation_id'] = sim_id
         startup_dict['inj_num'] = inj_num
         startup_dict['tmplt_id'] = tmplt_id
         startup_dict['tmplt_num'] = tmplt_num
-        startup_dict['pickle_file'] = pickle_file
+        startup_dict['finished_filtering'] = finished_filtering
         startup_dict['backup_archive'] = backup_archive
         startup_dict['scratch_archive'] = scratch_arxiv
         startup_dict['host'] = host
@@ -995,7 +1290,8 @@ def write_backup_archive(backup_dir, archive):
 
 
 def checkpoint(connection, backup_dir, archive, time_now, sim_id, inj_num,
-        tmplt_id, tmplt_num, username, backup_archive=False):
+        tmplt_id, tmplt_num, finished_filtering, username,
+        backup_archive=False):
     # copy the archive over
     if backup_archive:
         arxiv_fn, backup_arxv_fn = write_backup_archive(backup_dir, archive)
@@ -1017,12 +1313,14 @@ def checkpoint(connection, backup_dir, archive, time_now, sim_id, inj_num,
     sqlquery = '''
         INSERT INTO
             joblog (time, simulation_id, inj_num, tmplt_id, tmplt_num,
-                backup_archive, scratch_archive, username, host)
+                finished_filtering, backup_archive, scratch_archive,
+                username, host)
         VALUES
-            (?,?,?,?,?,?,?,?,?)
+            (?,?,?,?,?,?,?,?,?,?)
         '''
     connection.cursor().execute(sqlquery, (time_now, sim_id, inj_num, tmplt_id,
-        tmplt_num, backup_arxv_fn, arxiv_fn, username, host))
+        tmplt_num, finished_filtering, backup_arxv_fn, arxiv_fn, username,
+        host))
     connection.commit()
     # delete the last backup files
     if last_bkup_arxv is not None and backup_archive:

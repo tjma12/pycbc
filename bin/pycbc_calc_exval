@@ -249,10 +249,11 @@ for fnum, infile in enumerate(filenames):
 
         # get psd and needed workspace vectors
         if opts.asd_file is not None:
-            psd = work_space.get_psd_from_file(df, wfmin, sample_rate,
-                opts.asd_file)
+            psd = workSpace.get_psd_from_file(wfmin, sample_rate,
+                seg_length, opts.asd_file, dyn_range_exp=0)
         else:
-            psd = work_space.get_psd(df, wfmin, sample_rate, psd_model)
+            psd = workSpace.get_psd(wfmin, sample_rate, seg_length,
+                psd_model, dyn_range_exp=0)
 
         # we'll need a place to store work space vectors;
         # note that the length of these are set to the
