@@ -23,16 +23,6 @@ __prog__ = 'pycbc_overlaps_pipe'
 __author__ = 'Collin Capano <collin.capano@ligo.org>'
 __description__ = 'Writes overlap dag and sub files.'
 
-#
-# Turn off those damn column name warnings about Gamma
-#
-#def StripColumnName(name):
-#    try:
-#        return ColumnPattern.search(name).group("Name")
-#    except AttributeError:
-#        return name
-#table.StripColumnName = StripColumnName
-
 # for reading xmldocs
 class LIGOLWContentHandler(ligolw.LIGOLWContentHandler):
     pass
@@ -90,7 +80,6 @@ parser.add_option('-u', '--user-tag', help = 'Set a user tag to be applied to th
 parser.add_option('-c', '--config-file', help = 'Get configuration settings from an ini file.')
 parser.add_option('-s', '--start-seed', type = int, help = 'Start seed for the random number generators. Each node that uses a seed argument will increment this by 1.')
 parser.add_option('-f', '--tmpltbank-file', help = 'Template bank file to use.')
-parser.add_option('-A', '--skip-add-apprx', action='store_true', default=False, help = 'Turn on to skip adding an additional approximant to the injections.')
 
 opts, _ = parser.parse_args()
 
@@ -150,16 +139,12 @@ universe = cp.get('condor', 'universe')
 create_inj_exec = cp.get('condor', 'create_inj')
 combine_dbs_exec = cp.get('condor', 'combine_databases')
 randDists = cp.get('condor', 'randomize_distances')
-if not opts.skip_add_apprx:
-    addApprx = cp.get('condor', 'add_approximants')
 overlaps_exec = cp.get('condor', 'overlaps')
 exval_exec = cp.get('condor', 'calc_exval')
 
 # check that the executables exist
 execs = [create_inj_exec, combine_dbs_exec, randDists, overlaps_exec,
     exval_exec]
-if not opts.skip_add_apprx:
-    execs.append(addApprx) 
 for prog in execs:
     if not os.path.exists(prog):
         raise ValueError, 'executable %s not found' % prog
@@ -174,9 +159,6 @@ combine_dbs_exec = 'executables/%s' %(os.path.basename(combine_dbs_exec))
 
 randDists_job = pipeline.CondorDAGJob(universe, 'executables/%s' %(
     os.path.basename(randDists)))
-if not opts.skip_add_apprx:
-    addApprx_job = pipeline.CondorDAGJob(universe, 'executables/%s' %(
-        os.path.basename(addApprx)))
 overlaps_job = pipeline.CondorDAGJob(universe, 'executables/%s' %(
     os.path.basename(overlaps_exec)))
 exval_job = pipeline.CondorDAGJob(universe, 'executables/%s' %(
@@ -184,8 +166,6 @@ exval_job = pipeline.CondorDAGJob(universe, 'executables/%s' %(
 
 jobs = [(randDists, randDists_job), (overlaps_exec, overlaps_job),
     (exval_exec, exval_job)]
-if not opts.skip_add_apprx:
-    jobs.append((addApprx, addApprx_job)) 
 
 # set standard job parameters 
 for jobexec, job in jobs:
@@ -199,11 +179,6 @@ for jobexec, job in jobs:
 # randomize distances
 add_opts_from_ini(cp, 'randomize_distances', randDists_job)
 randDists_job.add_opt('tmp-space', opts.node_local_dir)
-
-# add approximants
-if not opts.skip_add_apprx:
-    add_opts_from_ini(cp, 'add_approximants', addApprx_job)
-    addApprx_job.add_opt('tmp-space', opts.node_local_dir)
 
 # overlaps
 if cp.has_option('overlaps', 'ifo'):
@@ -332,21 +307,7 @@ for nn in range(num_inj_nodes):
     randDists_node.add_output_file(db_outfile)
     randDists_node.set_category('randomize_distance')
     dag.add_node(randDists_node)
-
-    #
-    #   Create node to add extra approximant
-    #
-    if opts.skip_add_apprx:
-        last_node = randDists_node
-    else:
-        addApprx_node = pipeline.CondorDAGNode(addApprx_job)
-        #addApprx_node.add_var_opt('user-tag', thread_tag)
-        addApprx_node.add_file_arg(combineDBs_node.get_output_files()[0])
-        addApprx_node.add_output_file(combineDBs_node.get_output_files()[0])
-        addApprx_node.add_parent(randDists_node)
-        addApprx_node.set_category('add_approximants')
-        dag.add_node(addApprx_node)
-        last_node = addApprx_node
+    last_node = randDists_node
 
     #
     #   Create node to calculate the overlaps
