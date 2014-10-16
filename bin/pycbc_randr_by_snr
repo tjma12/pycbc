@@ -92,13 +92,13 @@ for fnum, infile in enumerate(filenames):
         inj.distance = 1.
 
         # check if f_final exists; if so calculate the sample rate to use from that
-        if inj.get_f_final() is not None:
-            sample_rate = int(2**(numpy.ceil(numpy.log2(inj.get_f_final()))+1))
+        if inj.f_final is not None:
+            sample_rate = int(2**(numpy.ceil(numpy.log2(inj.f_final))+1))
         else:
             sample_rate = opts.default_sample_rate
 
         # make the segment length a power of two
-        seg_length = int(2**numpy.ceil(numpy.log2(inj.get_duration())+1))
+        seg_length = int(2**numpy.ceil(numpy.log2(inj.duration)+1))
         # since the duration estimate is based on the 2PN approximation,
         # the duration may be too short; we'll just put a floor at 2s
         if seg_length < 2:
@@ -110,10 +110,10 @@ for fnum, infile in enumerate(filenames):
 
         # get the psd and needed workspace vectors
         if opts.asd_file is not None:
-            psd = workSpace.get_psd_from_file(wfmin, sample_rate,
+            psd = workSpace.get_psd_from_file(wFmin, sample_rate,
                 seg_length, opts.asd_file, dyn_range_exp=0)
         else:
-            psd = workSpace.get_psd(wfmin, sample_rate, seg_length,
+            psd = workSpace.get_psd(wFmin, sample_rate, seg_length,
                 psd_model, dyn_range_exp=0)
 
         # calculate sigma
@@ -137,7 +137,7 @@ for fnum, infile in enumerate(filenames):
                 eff_dist_t = %f,
                 alpha = %f
             WHERE simulation_id == "%s"'''
-        sqlquery = sqlquery %(distance, sigma, inj.get_duration(), inj.simulation_id)
+        sqlquery = sqlquery %(distance, sigma, inj.duration, inj.simulation_id)
         connection.cursor().execute(sqlquery)
         connection.commit()
 
