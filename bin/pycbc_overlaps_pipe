@@ -115,10 +115,7 @@ tempfile.tempdir = '.'
 fh, tempout = tempfile.mkstemp(suffix='.out')
 tempoutf = os.fdopen(fh, 'w')
 
-# set up pipeline parameters (directories, ifo, etc.)
-ifo = cp.get('pipeline', 'ifo')
-if ifo.upper() == 'NONE':
-    ifo = None
+# set up pipeline parameters
 if not os.path.exists('logs/'):
     os.mkdir('logs/')
 injections_dir = cp.get('pipeline', 'injections-directory')
@@ -132,6 +129,12 @@ if not os.path.exists(results_dir):
     os.mkdir(results_dir)
 if not os.path.exists('executables'):
     os.mkdir('executables')
+
+# we need to know the ifo for file-naming purposes
+if cp.has_option('common', 'ifo'):
+    ifo = cp.get('common', 'ifo')
+else:
+    ifo = None
 
 universe = cp.get('condor', 'universe')
 
@@ -175,24 +178,35 @@ for jobexec, job in jobs:
 #
 #   Set static options
 #
+if cp.has_option('common', 'psd-model') and \
+        cp.has_option('common', 'asd-file'):
+    raise ValueError('must provide a psd-model or an asd-file, not both')
+elif cp.has_option('common', 'psd-model'):
+    psd_type = 'psd-model'
+elif cp.has_option('common', 'asd-file'):
+    psd_type = 'asd-file'
+else:
+    raise ValueError('please provide a psd-model or an asd-file in [common]')
 
 # randomize distances
 add_opts_from_ini(cp, 'randomize_distances', randDists_job)
+# set common options; we only need some of the ones from [common]
+common_opts = [psd_type, 'waveform-f-min', 'overlap-f-min'] 
+for opt in common_opts:
+    randDists_job.add_opt(opt, cp.get('common', opt))
 randDists_job.add_opt('tmp-space', opts.node_local_dir)
 
 # overlaps
-if cp.has_option('overlaps', 'ifo'):
-    raise ValueError('ifo should be set in the [pipeline] section of the ' +\
-        'config file, not in the [overlaps] section')
 add_opts_from_ini(cp, 'overlaps', overlaps_job)
+# add all arguments from common section
+add_opts_from_ini(cp, 'common', overlaps_job)
 overlaps_job.add_opt('tmp-space', opts.node_local_dir)
 overlaps_job.add_opt('output-dir', results_dir)
 
 # expectation values
-if cp.has_option('calc_exval', 'ifo'):
-    raise ValueError('ifo should be set in the [pipeline] section of the ' +\
-        'config file, not in the [calc_exval] section')
 add_opts_from_ini(cp, 'calc_exval', exval_job)
+# add all arguments from common section
+add_opts_from_ini(cp, 'common', exval_job)
 exval_job.add_opt('tmp-space', opts.node_local_dir)
 exval_job.add_opt('output-dir', results_dir)
 
