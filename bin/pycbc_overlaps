@@ -89,6 +89,10 @@ if not opts.vary_n:
     N = sample_rate * seg_length
     df = 1./seg_length
 
+# we define a global minimum segment length to ensure we don't get errors
+# with really high mass systems
+global_min_seg_length = 4
+
 if opts.asd_file is None and opts.psd_model is None:
     raise ValueError("must specify --asd-file or --psd-model")
 if opts.asd_file is not None and not os.path.exists(opts.asd_file):
@@ -445,9 +449,9 @@ for fnum, infile in enumerate(filenames):
 
                 # since the duration estimates are based on the 2PN
                 # approximation, the duration may be too short; we'll just put
-                # a floor at 2s
-                if seg_length < 2:
-                    seg_length = 2
+                # a floor at the minimum segment length
+                if seg_length < global_min_seg_length:
+                    seg_length = global_min_seg_length
                
                 N = sample_rate * seg_length
                 df = 1./seg_length
@@ -562,7 +566,8 @@ for fnum, infile in enumerate(filenames):
             cmplx_ts, _, norm, maxidx, offset, _ = \
                 overlap_utils.filter_by_resampling(
                 htilde, htildeprime, psd, ofmin, target_sample_rate,
-                max_resample_length=2, h_norm=tmplt.sigma**2, out=out_work_mem,
+                max_resample_length=global_min_seg_length/4,
+                h_norm=tmplt.sigma**2, out=out_work_mem,
                 corr_out=corr_work_mem, zero_pad_to_common_Nyquist=opts.vary_n,
                 work_v1=work_v1, work_v2=work_v2, work_psd=work_psd)
 

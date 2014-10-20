@@ -219,25 +219,25 @@ for fnum, infile in enumerate(filenames):
         # get the sample rate and segment length to use
         if opts.vary_n:
             sample_rate = int(2**(numpy.ceil(numpy.log2(
-                max(tmplt.get_f_final(), inj.get_f_final()))+1)))
+                max(tmplt.f_final, inj.f_final))+1)))
 
             # get the segment length to use
             # we'll set the segment length to be four times the max duration
             # of this template and the injection
             seg_length = int(2**(numpy.ceil(numpy.log2(
-                max(tmplt.get_duration(), inj.get_duration())))+2))
+                max(tmplt.duration, inj.duration)))+2))
             # since the duration estimates are based on the 2PN
             # approximation, the duration may be too short; we'll just put
-            # a floor at 2s
-            if seg_length < 2:
-                seg_length = 2
+            # a floor at 4s
+            if seg_length < 4:
+                seg_length = 4
 
             df = 1./seg_length
 
 
         # set the segment start time; we'll always make this to be
         # the injection's end_time - 2.5 times its estimated duration
-        segment_start = inj.detector_end_time(ifo) - 2.5*inj.get_duration()
+        segment_start = inj.detector_end_time(ifo) - 2.5*inj.duration
 
         # get the FD injection and waveform
         # Note that these will also store the TD versions if they don't
@@ -249,10 +249,10 @@ for fnum, infile in enumerate(filenames):
 
         # get psd and needed workspace vectors
         if opts.asd_file is not None:
-            psd = workSpace.get_psd_from_file(wfmin, sample_rate,
+            psd = work_space.get_psd_from_file(wfmin, sample_rate,
                 seg_length, opts.asd_file, dyn_range_exp=0)
         else:
-            psd = workSpace.get_psd(wfmin, sample_rate, seg_length,
+            psd = work_space.get_psd(wfmin, sample_rate, seg_length,
                 psd_model, dyn_range_exp=0)
 
         # we'll need a place to store work space vectors;

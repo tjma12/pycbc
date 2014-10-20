@@ -548,7 +548,7 @@ class Waveform(object):
         except AttributeError:
             raise ValueError("f_final not set")
 
-    def estimate_duration(self, f_min, f_final=None, order=4):
+    def estimate_duration(self, f_min, f_final=None, order=4, floor=2.):
         """
         Uses PN approximation to the given order to estimate the duration of
         the waveform in the time domain.
@@ -559,7 +559,10 @@ class Waveform(object):
             Terminating frequency, in Hz. If None, will use Swarzschild ISCO.
         order: int
             Order to use to estimate = twice the PN order. Currently supports
-            up to 4 (= 2PN).
+            up to 4 (= 2PN). Default is 4.
+        floor: float
+            Value to return if the estimate is close to 0. This can happen
+            with high mass systems. Default is 2.
 
         Returns
         -------
@@ -568,10 +571,13 @@ class Waveform(object):
         """
         if f_final is None:
             f_final = schwarzschild_fisco(self.mass1, self.mass2)
-        return estimate_duration(self.mass1,
+        dur = estimate_duration(self.mass1,
             self.mass2, numpy.array([self.spin1x, self.spin1y,
             self.spin1z]), numpy.array([self.spin2x, self.spin2y,
             self.spin2z]), f_min, f_final, order=order)
+        if dur < floor:
+            dur = floor
+        return dur 
 
     def set_duration(self, duration):
         """
@@ -784,7 +790,8 @@ class Waveform(object):
             if store and (self._archive is None or self._archive_id is None):
                 raise ValueError, "In order to store the waveform, an "+\
                     "archive and archive_id must be set."
-            approximant = lalsim.GetApproximantFromString(str(self.approximant))
+            approximant = lalsim.GetApproximantFromString(
+                str(self.approximant))
             # check if we need to adjust the spin order
             if self.spin_order is not None:
                 wflags = lalsim.SimInspiralCreateWaveformFlags()
@@ -847,7 +854,8 @@ class Waveform(object):
             if store and (self._archive is None or self._archive_id is None):
                 raise ValueError, "In order to store the waveform, an "+\
                     "archive and archive_id must be set."
-            approximant = lalsim.GetApproximantFromString(str(self.approximant))
+            approximant = lalsim.GetApproximantFromString(
+                str(self.approximant))
             if lalsim.SimInspiralImplementedTDApproximants(approximant):
                 # we use None as the segment length to limit the size of the
                 # TD waveform stored; this also makes repeated calls to
@@ -977,7 +985,8 @@ class Template(Waveform):
                 # keep track of how much of the waveform is wrapped around
                 self._wraparound_dur = (len(h) - peak_indx)*h.delta_t
                 # shift
-                h = position_td_template(h, peak_indx, segment_length*sample_rate)
+                h = position_td_template(h, peak_indx,
+                    segment_length*sample_rate)
             else:
                 self._wraparound_dur = 0.
             if store:
@@ -1113,7 +1122,10 @@ class Injection(Waveform):
     """
     _injparams = ['ra', 'dec', 'polarization', 'geocent_end_time',
         'geocent_end_time_ns', 'simulation_id']
-    __slots__ = Waveform.__slots__ + _injparams
+    __slots__ = Waveform.__slots__ + _injparams + ['_epochs']
+    # note: _epochs, which is a dictionary, is needed for quickly
+    # retrieving unsegmented waveforms from an archive; see get_td_waveform,
+    # below
 
     def __init__(self, **kwargs):
         # make new parameters required inputs, along with distance
@@ -1130,6 +1142,8 @@ class Injection(Waveform):
             raise ValueError, "geocent_end_time must be an integer"
         if not isinstance(self.geocent_end_time_ns, int):
             raise ValueError, "geocent_end_time_ns must be an integer"
+        # make _epochs a dict
+        self._epochs = {}
 
     @property
     def geocent_time(self):
@@ -1229,6 +1243,8 @@ class Injection(Waveform):
             try:
                 h, _ = self.waveform_from_archive(sample_rate, None,
                     'TD', tag=str(ifo))
+                h._epoch = lal.LIGOTimeGPS(self._epochs[ifo][0],
+                    self._epochs[ifo][1])
             except KeyError:
                 # neither, generate the waveform
                 # if we're going to store, make sure that archive and
@@ -1267,6 +1283,10 @@ class Injection(Waveform):
 
                 if store_unsegmented:
                     self.store_waveform(h, sample_rate, None, tag=str(ifo))
+                    # we'll save the epoch so we can quickly set it later if
+                    # retrieving from an archive
+                    self._epochs[ifo] = (h.start_time.gpsSeconds,
+                        h.start_time.gpsNanoSeconds)
 
             # zero-pad and shift h so that it sits in the appropriate
             # spot in the segment
