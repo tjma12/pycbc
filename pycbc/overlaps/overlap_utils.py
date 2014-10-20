@@ -772,7 +772,7 @@ class WorkSpace:
             self.psds[psd_model, sample_rate, segment_length, dyn_range_exp] =\
                 getattr(pyPSD, psd_model)((segment_length*sample_rate)/2 + 1,
                     1./segment_length, fmin) * 2.**(2*dyn_range_exp)
-            return self.psds[psd_model, sample_rate, segment_length]
+            return self.psds[psd_model, sample_rate, segment_length, dyn_range_exp]
 
     def get_psd_from_file(self, fmin, sample_rate, segment_length, filename,
             is_asd_file=True, dyn_range_exp=0):
