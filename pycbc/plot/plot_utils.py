@@ -74,10 +74,38 @@ def parse_results_cache(cache_file):
     f.close()
     return filenames
 
-def get_injection_results(filenames, get_inj_map = True, ref_apprx = None, test_apprx = None, verbose=False):
+def get_injection_results(filenames, weight_function='uniform',
+        get_inj_map=False, ref_apprx=None, test_apprx=None, verbose=False):
     if get_inj_map and (test_apprx is None or ref_apprx is None):
         raise ValueError, "If want an inj_map, must provide a reference and test approximate"
-    sqlquery = 'select sim.waveform, sim.simulation_id, sim.mass1, sim.mass2, sim.spin1z, sim.spin2z, sim.eff_dist_h, sim.distance, sim.inclination, sim.eff_dist_t, tmplt.event_id, tmplt.mass1, tmplt.mass2, res.effectualness, res.snr, res.snr_std, res.chisq, res.chisq_std, res.chisq_dof, res.new_snr, res.new_snr_std, res.num_successes, res.sample_rate, res.coinc_event_id from overlap_results as res join sim_inspiral as sim, coinc_event_map as map on sim.simulation_id == map.event_id and map.coinc_event_id == res.coinc_event_id join sngl_inspiral as tmplt, coinc_event_map as mapB on mapB.coinc_event_id == map.coinc_event_id and mapB.event_id == tmplt.event_id'
+    sqlquery = """
+        SELECT
+            sim.waveform, sim.simulation_id,
+            sim.mass1, sim.mass2, sim.spin1z, sim.spin2z, sim.eff_dist_h,
+            sim.distance, sim.inclination, sim.eff_dist_t, tmplt.event_id,
+            tmplt.mass1, tmplt.mass2, res.effectualness, res.snr, res.snr_std,
+            res.chisq, res.chisq_std, res.chisq_dof, res.new_snr,
+            res.new_snr_std, res.num_successes, res.sample_rate,
+            res.coinc_event_id
+        FROM
+            overlap_results AS res
+        JOIN
+            coinc_definer AS cdef, coinc_event AS cev
+        ON
+            cev.coinc_event_id == res.coinc_event_id AND
+            cdef.coinc_def_id == cev.coinc_def_id AND
+            cdef.description == ?
+        JOIN
+            sim_inspiral as sim, coinc_event_map as map
+        ON
+            sim.simulation_id == map.event_id AND
+            map.coinc_event_id == res.coinc_event_id
+        JOIN
+            sngl_inspiral AS tmplt, coinc_event_map AS mapB
+        ON
+            mapB.coinc_event_id == map.coinc_event_id AND
+            mapB.event_id == tmplt.event_id
+    """
     results = {}
     reftest_map = {}
     idx = 0
@@ -90,7 +118,11 @@ def get_injection_results(filenames, get_inj_map = True, ref_apprx = None, test_
         connection = sqlite3.connect(thisfile)
         id_map = {}
         try:
-            for apprx, sim_id, m1, m2, s1z, s2z, eff_dist, dist, inc, target_snr, tmplt_evid, tmplt_m1, tmplt_m2, ff, snr, snr_std, chisq, chisq_std, chisq_dof, new_snr, new_snr_std, nsamp, sample_rate, ceid in connection.cursor().execute(sqlquery):
+            for (apprx, sim_id, m1, m2, s1z, s2z, eff_dist, dist, inc,
+                    target_snr, tmplt_evid, tmplt_m1, tmplt_m2, ff, snr,
+                    snr_std, chisq, chisq_std, chisq_dof, new_snr, new_snr_std,
+                    nsamp, sample_rate, ceid) in \
+                    connection.cursor().execute(sqlquery, (weight_function,)):
                 results.setdefault(apprx, [])
                 thisRes = Result()
                 thisRes.unique_id = idx
@@ -133,7 +165,8 @@ def get_injection_results(filenames, get_inj_map = True, ref_apprx = None, test_
         if get_inj_map:
             inj_map = get_reftest_map_fromdb(connection, ref_apprx, test_apprx)
             # put map into terms of unique id
-            reftest_map.update(dict([ [id_map[id1], id_map[id2]] for id1,id2 in inj_map.items() if id1 in id_map and id2 in id_map]))
+            reftest_map.update(dict([ [id_map[id1], id_map[id2]] for id1,id2 \
+                in inj_map.items() if id1 in id_map and id2 in id_map]))
 
         connection.close()
 

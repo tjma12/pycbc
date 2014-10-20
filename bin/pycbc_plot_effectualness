@@ -10,6 +10,7 @@ from pycbc.plot import plot_utils
 
 parser = OptionParser()
 parser.add_option('-c', '--cache-file', help = 'cache file containing result databases')
+parser.add_option('-W', '--weight-function', default='uniform', help="Get effectualness for the given weight function. Default is 'uniform'. The weight name provided must exist in the description column of the coinc_definer table.")
 parser.add_option('-P', '--apply-cut', action = 'append', default = [], metavar = 'arg:min,max', help = 'apply cut to injections; can specify multiple times')
 parser.add_option('-t', '--plot-templates', action = 'store_true', default = False, help = 'plot the templates on top of the results')
 parser.add_option('-x', '--x-val', metavar = 'args:label', help = 'x value to plot')
@@ -53,7 +54,8 @@ else:
 
 print "getting results"
 filenames = plot_utils.parse_results_cache(opts.cache_file)
-inj_results, _ = plot_utils.get_injection_results(filenames, get_inj_map=False, verbose=True)
+inj_results, _ = plot_utils.get_injection_results(filenames,
+    weight_function=opts.weight_function, get_inj_map=False, verbose=True)
 apply_cut = {}
 for thiscut in opts.apply_cut:
     arg, vals = thiscut.split(':')

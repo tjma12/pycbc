@@ -319,6 +319,7 @@ setup (
                'bin/pycbc_calc_exval',
                'bin/pycbc_overlaps_pipe',
                'bin/pycbc_plot_effectualness',
+               'bin/pycbc_plot_effectualness_cumhist',
                'bin/pycbc_generate_match_win',
                'bin/pycbc_plot_injrec',
                'bin/hdfcoinc/pycbc_coinc_mergetrigs',
