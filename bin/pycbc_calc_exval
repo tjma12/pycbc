@@ -234,6 +234,12 @@ for fnum, infile in enumerate(filenames):
 
             df = 1./seg_length
 
+            # if the sample rate is larger than the target sample rate,
+            # we'll just use the sample rate
+            target_sample_rate = opts.sample_rate
+            if sample_rate > target_sample_rate:
+                target_sample_rate = sample_rate
+
 
         # set the segment start time; we'll always make this to be
         # the injection's end_time - 2.5 times its estimated duration
