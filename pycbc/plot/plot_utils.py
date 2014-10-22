@@ -19,6 +19,8 @@ class Result:
         self.inclination = None
         self.target_snr = None
         self.effectualness = None
+        self.weight_function = None
+        self.weight = None
         self.snr = None
         self.snr_std = None
         self.chisq = None
@@ -84,7 +86,7 @@ def get_injection_results(filenames, weight_function='uniform',
             sim.mass1, sim.mass2, sim.spin1z, sim.spin2z, sim.eff_dist_h,
             sim.distance, sim.inclination, sim.eff_dist_t, tmplt.event_id,
             tmplt.mass1, tmplt.mass2, res.effectualness, res.snr, res.snr_std,
-            res.chisq, res.chisq_std, res.chisq_dof, res.new_snr,
+            tw.weight, res.chisq, res.chisq_std, res.chisq_dof, res.new_snr,
             res.new_snr_std, res.num_successes, res.sample_rate,
             res.coinc_event_id
         FROM
@@ -105,6 +107,11 @@ def get_injection_results(filenames, weight_function='uniform',
         ON
             mapB.coinc_event_id == map.coinc_event_id AND
             mapB.event_id == tmplt.event_id
+        JOIN
+            tmplt_weights AS tw
+        ON
+            tw.tmplt_id == tmplt.event_id AND
+            tw.weight_function = ?
     """
     results = {}
     reftest_map = {}
@@ -120,9 +127,10 @@ def get_injection_results(filenames, weight_function='uniform',
         try:
             for (apprx, sim_id, m1, m2, s1z, s2z, eff_dist, dist, inc,
                     target_snr, tmplt_evid, tmplt_m1, tmplt_m2, ff, snr,
-                    snr_std, chisq, chisq_std, chisq_dof, new_snr, new_snr_std,
-                    nsamp, sample_rate, ceid) in \
-                    connection.cursor().execute(sqlquery, (weight_function,)):
+                    snr_std, weight, chisq, chisq_std, chisq_dof, new_snr,
+                    new_snr_std, nsamp, sample_rate, ceid) in \
+                    connection.cursor().execute(sqlquery, (weight_function,
+                    weight_function)):
                 results.setdefault(apprx, [])
                 thisRes = Result()
                 thisRes.unique_id = idx
@@ -144,6 +152,8 @@ def get_injection_results(filenames, weight_function='uniform',
                 thisRes.effectualness = ff
                 thisRes.snr = snr
                 thisRes.snr_std = snr_std
+                thisRes.weight_function = weight_function
+                thisRes.weight = weight
                 thisRes.chisq = chisq
                 thisRes.chisq_sts = chisq_std
                 thisRes.chisq_dof = chisq_dof
