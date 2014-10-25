@@ -100,6 +100,56 @@ def plot_effectualness(results, xarg, xlabel, yarg, ylabel,
 
 
 def plot_effectualness_cumhist(results, tmplt_label='', inj_label='',
+        target_mismatch=0.97, xmin=None, xmax=None, ymin=None,
+        ymax=None, logy=False, dpi=300):
+
+    plot_data = {}
+    fig = pyplot.figure(dpi=dpi)
+    ax = fig.add_subplot(111)
+    if xmin is not None and xmax is not None:
+        range = (xmin, xmax)
+    else:
+        range = None
+    xvals = numpy.array([x.effectualness for x in results])
+    xvals.sort()
+    # yvals are the % of points with an effectualness <= each xval
+    yvals = 100.*numpy.array([numpy.searchsorted(xvals, x, side='right') \
+        for x in xvals]) / float(len(xvals))
+    ax.plot(xvals, yvals, 'b-', linewidth=1, zorder=2)
+    plot_data['xvals'] = xvals
+    plot_data['yvals'] = yvals
+    if logy:
+        ax.semilogy()
+    if tmplt_label or inj_label:
+        lbl = ','.join([tmplt_label.strip(), inj_label.strip()])
+    else:
+        lbl = ''
+    ax.set_xlabel('$\mathcal{E}_{\mathrm{%s}}$' % lbl)
+    ax.set_ylabel('$\% \leq \mathcal{E}$')
+    # get axis limits
+    plt_xmin, plt_xmax = ax.get_xlim()
+    if xmin is not None:
+        plt_xmin = xmin
+    if xmax is not None:
+        plt_xmax = xmax
+    plt_ymin, plt_ymax = ax.get_ylim()
+    if ymin is not None:
+        plt_ymin = ymin
+    if ymax is not None:
+        plt_ymax = ymax
+    # plot the target mismatch
+    ax.plot([target_mismatch, target_mismatch], [plt_ymin, plt_ymax], 'r--',
+        linewidth=1, zorder=2)
+    # set the axis limits
+    ax.set_xlim(plt_xmin, plt_xmax)
+    ax.set_ylim(plt_ymin, plt_ymax)
+    
+    ax.grid(which = 'both', zorder = 0)
+
+    return fig, plot_data
+
+
+def plot_effectualness_barcumhist(results, tmplt_label='', inj_label='',
         target_mismatch=0.97, nbins=20, xmin=None, xmax=None, ymin=None,
         ymax=None, logy=False, dpi=300):
 

@@ -955,7 +955,8 @@ class OverlapResult:
     params = ['ifo', 'effectualness', 'snr', 'chisq', 'new_snr', 'chisq_dof',
         'time_offset', 'time_offset_ns', 'snr_std', 'chisq_std', 'new_snr_std',
         'num_tries', 'num_successes', 'sample_rate', 'segment_length',
-        'tmplt_approximant', 'overlap_f_min', 'waveform_f_min', 'weight']
+        'tmplt_approximant', 'overlap_f_min', 'waveform_f_min',
+        'weight_function', 'weight']
     __slots__ = params + ['template', 'injection']
     
     def __init__(self, template, injection):

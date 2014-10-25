@@ -705,6 +705,7 @@ for fnum, infile in enumerate(filenames):
                 injections[simid])
             bestMatch.effectualness = eff
             bestMatch.weight = wt
+            bestMatch.weight_function = weight_func
             bestMatch.time_offset = dt
             bestMatch.time_offset_ns = dt_ns
             bestMatch.segment_length = seg_length

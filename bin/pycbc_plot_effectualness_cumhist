@@ -17,7 +17,8 @@ parser.add_option('-X', '--x-lims', metavar = 'xmin,xmax', help = 'x limits to u
 parser.add_option('-Y', '--y-lims', metavar = 'ymin,ymax', help = 'y limits to use')
 parser.add_option('-T', '--tmplt-label', default='', help='set a label for the templates. This will be placed in leading subscript in the colorbar label.')
 parser.add_option('-I', '--inj-label', default='', help='set a label for the injections. This will be placed in trailing subscript in the colorbar label.')
-parser.add_option('-N', '--nbins', type='int', default=20, help='Number of bins to use. Default is 20.')
+parser.add_option('-B', '--plot-bar', action='store_true', help='Plot the cumulative histogram as a bar plot. Default is False.')
+parser.add_option('-N', '--nbins', type='int', default=20, help='The number of bins to use. This is only used if plot-bar is on. Default is 20.')
 parser.add_option('-M', '--target-mismatch', type='float', default=0.97, help='The minimal match of the bank. Default is 0.97.')
 parser.add_option('-o', '--output-dir', default='.', help = 'directory to save plot(s) to')
 parser.add_option('-u', '--user-tag', help = 'set a user tag for output file names')
@@ -56,10 +57,18 @@ if apply_cut:
 print "plotting..."
 for apprx, results in inj_results.items():
     print "\t%s" % apprx
-    fig, plot_data = plot.plot_effectualness_cumhist(results, opts.tmplt_label,
-        opts.inj_label, target_mismatch=opts.target_mismatch, nbins=opts.nbins,
-        xmin=xmin, xmax=xmax, ymin=ymin,
-        ymax=ymax, logy=opts.log_y, dpi=opts.dpi)
+    if opts.plot_bar:
+        fig, plot_data = plot.plot_effectualness_barcumhist(results,
+            opts.tmplt_label, opts.inj_label,
+            target_mismatch=opts.target_mismatch, nbins=opts.nbins,
+            xmin=xmin, xmax=xmax, ymin=ymin,
+            ymax=ymax, logy=opts.log_y, dpi=opts.dpi)
+    else:
+        fig, plot_data = plot.plot_effectualness_cumhist(results,
+            opts.tmplt_label, opts.inj_label,
+            target_mismatch=opts.target_mismatch,
+            xmin=xmin, xmax=xmax, ymin=ymin,
+            ymax=ymax, logy=opts.log_y, dpi=opts.dpi)
 
     fig.savefig('%s/plot_effectualness_cumhist%s-%s.%s' %(opts.output_dir, tag,
         apprx, opts.plot_type), dpi=opts.dpi, bbox_inches='tight')
