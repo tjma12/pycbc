@@ -543,6 +543,8 @@ for fnum, infile in enumerate(filenames):
                 pytypes.complex_same_precision_as(htilde))
             corr_work_mem = workSpace.get_corr_vec(N,
                 pytypes.complex_same_precision_as(htilde))
+            out_work_mem.clear()
+            corr_work_mem.clear()
             if opts.vary_n:
                 work_v1 = workSpace.get_work_FS_vec('v1', N/2+1, seg_length,
                     pytypes.complex_same_precision_as(htilde))
