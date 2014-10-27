@@ -270,8 +270,6 @@ for fnum, infile in enumerate(filenames):
             dtype=pytypes.complex_same_precision_as(htilde))
         corr_work_mem = pytypes.zeros(N,
             dtype=pytypes.complex_same_precision_as(htilde))
-        #snr_work_mem = None
-        #corr_work_mem = None
         work_htilde = pytypes.FrequencySeries(pytypes.zeros(kmax,
             dtype=pytypes.complex_same_precision_as(htilde)),
             delta_f=htilde.delta_f)

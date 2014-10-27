@@ -87,17 +87,11 @@ def get_injection_results(filenames, weight_function='uniform',
             sim.distance, sim.inclination, sim.eff_dist_t, tmplt.event_id,
             tmplt.mass1, tmplt.mass2, tmplt.spin1z, tmplt.spin2z,
             res.effectualness, res.snr, res.snr_std,
-            res.weight, res.chisq, res.chisq_std, res.chisq_dof, res.new_snr,
+            tw.weight, res.chisq, res.chisq_std, res.chisq_dof, res.new_snr,
             res.new_snr_std, res.num_successes, res.sample_rate,
             res.coinc_event_id
         FROM
             overlap_results AS res
-        JOIN
-            coinc_definer AS cdef, coinc_event AS cev
-        ON
-            cev.coinc_event_id == res.coinc_event_id AND
-            cdef.coinc_def_id == cev.coinc_def_id AND
-            cdef.description == ?
         JOIN
             sim_inspiral as sim, coinc_event_map as map
         ON
@@ -108,8 +102,18 @@ def get_injection_results(filenames, weight_function='uniform',
         ON
             mapB.coinc_event_id == map.coinc_event_id AND
             mapB.event_id == tmplt.event_id
+        JOIN
+            coinc_definer AS cdef, coinc_event AS cev
+        ON
+            cev.coinc_event_id == res.coinc_event_id AND
+            cdef.coinc_def_id == cev.coinc_def_id
+        JOIN
+            tmplt_weights as tw
+        ON
+            tw.tmplt_id == tmplt.event_id AND
+            tw.weight_function == cdef.description
         WHERE
-            res.weight_function == ?
+            cdef.description == ?
     """
     results = {}
     reftest_map = {}
@@ -128,8 +132,7 @@ def get_injection_results(filenames, weight_function='uniform',
                     tmplt_s2z, ff, snr,
                     snr_std, weight, chisq, chisq_std, chisq_dof, new_snr,
                     new_snr_std, nsamp, sample_rate, ceid) in \
-                    connection.cursor().execute(sqlquery, (weight_function,
-                    weight_function)):
+                    connection.cursor().execute(sqlquery, (weight_function,)):
                 results.setdefault(apprx, [])
                 thisRes = Result()
                 thisRes.unique_id = idx
