@@ -28,16 +28,19 @@ def plot_effectualness(results, xarg, xlabel, yarg, ylabel,
         tmplt_label='', inj_label='', logx=False, logy=False,
         plot_templates=False, templates=[],
         xmin=None, xmax=None, ymin=None, ymax=None, zmin=None, zmax=None,
-        ptsize=3, cmap=pyplot.cm.Reds_r, dpi=300):
+        ptsize=3, cmap=pyplot.cm.Reds, bkgclr='k', dpi=300):
     
-    fig = pyplot.figure(dpi = dpi)
-    ax = fig.add_subplot(111, axisbg = 'k')
+    fig = pyplot.figure(dpi=dpi)
+    ax = fig.add_subplot(111, axisbg=bkgclr)
     plot_data = {}
     plot_data['args'] = (xarg, yarg)
-    # get x-values
-    xvals = [plot_utils.get_arg(res, xarg) for res in results] 
-    yvals = [plot_utils.get_arg(res, yarg) for res in results]
-    zvals = [res.effectualness for res in results]
+    xvals = numpy.array([plot_utils.get_arg(res, xarg) for res in results])
+    yvals = numpy.array([plot_utils.get_arg(res, yarg) for res in results])
+    zvals = numpy.array([res.effectualness for res in results])
+    sort_idx = zvals.argsort()[::-1]
+    xvals = xvals[sort_idx]
+    yvals = yvals[sort_idx]
+    zvals = zvals[sort_idx]
     plot_data['data'] = (xvals, yvals, zvals)
     sc = ax.scatter(xvals, yvals, edgecolors='none', c=zvals, s=ptsize,
         vmin=zmin, vmax=zmax, zorder=1, cmap=cmap)
