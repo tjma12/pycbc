@@ -1,0 +1,127 @@
+#! /usr/bin/env python
+
+__prog__ = 'pycbc_plot_snrchi'
+__author__ = 'Collin Capano <collin.capano@ligo.org>'
+__description__ = 'Plots chisq versus snr using results from overlaps_pipe.'
+__usage__ = '%s [OPTIONAL_COMMANDS] CACHE_FILE1.cache[:LABEL1:COLOR1:uniform|WEIGHT_FUNCTION:APPROXIMANT] CACHE_FILE2.cache[:LABEL2:COLOR2:uniform|WEIGHT_FUNCTION:APPROXIMANT] ...' % __prog__ + """
+
+The results in all of the databases listed in each cache file will be plotted
+together as a single color. The z-order of the scatter points is determined by
+the order that the cache files are provided. Optional arguments after the
+cache-file name can be used to adjust what is plotted together and other plot
+attributes. For example, if you want the results in CACHE_FILE1.cache to be
+labelled 'foo' in the legend, type CACHE_FILE1.cache:"foo". To specify a color
+to use for all of the points in a given group, add a colon followed by the
+color after the label. Any matplotlib color is permitted. If no color is
+specified, the jet colormap will be used. To specify a weight function, add
+the weight function after the color; if no weight function is provided,
+uniform will be used. To specify a specific injection approximant, add the
+approximant name after the weight function. If no approximant is specified,
+all approximants present in the databases will be plotted. To skip an
+argument, just leave the argument blank. For example, if you wanted to specify
+a label and a weight function, but not a color, you would type
+"CACHE_FILE1.cache:foo::uniform"."""
+
+import os
+import sqlite3
+from optparse import OptionParser
+import math
+import numpy
+from pycbc import plot
+from pycbc.plot import plot_utils
+
+parser = OptionParser(description=__description__, usage=__usage__)
+parser.add_option('-o', '--output-dir', default='.', help = 'directory to save plot(s) to')
+parser.add_option('-u', '--user-tag', help = 'add a user tag to plots')
+parser.add_option('-R', '--plot-reduced-chisq', action = 'store_true', default = False, help = 'make the y-axis reduced chisq; otherwise will be chisq')
+parser.add_option('-n', '--plot-newsnr', metavar = 'newsnr1,newsnr2[,...]', help = 'Plot the specified lines of constant new snr. Can only be done if plot-reduced-chisq is on.')
+parser.add_option('-X', '--newsnr-cut', type = 'float', default = None, help = 'Make the newsnr line given by newsnr-cut bold')
+parser.add_option('-d', '--dpi', type='int', default=300, help='dpi to use for plots; default is 300')
+parser.add_option('-A', '--x-min', type = 'float', help = 'min x for plot')
+parser.add_option('-B', '--x-max', type = 'float', help = 'max x for plot')
+parser.add_option('-U', '--y-min', type = 'float', help = 'min y for plot')
+parser.add_option('-V', '--y-max', type = 'float', help = 'max y for plot')
+parser.add_option('-P', '--apply-cut', action = 'append', default = [], metavar = 'arg:min,max', help = 'apply cut to injections; can specify multiple times')
+
+opts, cache_files = parser.parse_args()
+
+if opts.user_tag is not None:
+    tag = '_%s' % opts.user_tag
+else:
+    tag = ''
+
+plot_newsnrs = map(float, opts.plot_newsnr.split(','))
+
+apply_cut = {}
+for thiscut in opts.apply_cut:
+    arg, vals = thiscut.split(':')
+    apply_cut[arg] = map(float, vals.split(','))
+
+print "Cycling over cache files:"
+all_results = []
+labels = []
+colors = []
+for ii,cache_file_arg in enumerate(cache_files):
+    print "%i / %i" %(ii+1, len(cache_files))
+    # parse the cache file arguments
+    cache_file_arg = cache_file_arg.split(':')
+    if len(cache_file_arg) == 1:
+        cache_file = cache_file_arg[0]
+        label = color = approx = None
+        weight_function = 'uniform'
+    elif len(cache_file_arg) == 2:
+        cache_file, label = cache_file_arg
+        approx = color = None
+        weight_function = 'uniform'
+    elif len(cache_file_arg) == 3:
+        cache_file, label, color = cache_file_arg
+        approx = None
+        weight_function = 'uniform'
+    elif len(cache_file_arg) == 4:
+        cache_file, label, color, weight_function = cache_file_arg
+        approx = None
+    elif len(cache_file_arg) == 5:
+        cache_file, label, color, weight_function, approx = cache_file_arg
+    else:
+        raise ValueError("cache file %s is not in correct format; " %(
+            cache_file_arg) + "see help message")
+
+    if label == '':
+        label = None
+    if color == '':
+        color = None
+    if weight_function == '':
+        weight_function = 'uniform'
+    if approx == '':
+        approx = None
+
+    print "  getting results"
+    filenames = plot_utils.parse_results_cache(cache_file)
+    inj_results, _ = plot_utils.get_injection_results(filenames,
+        weight_function=weight_function.lower(), get_inj_map=False,
+        verbose=True)
+    if apply_cut:
+        print "  applying cuts"
+        inj_results = plot_utils.slice_results(inj_results, apply_cut)
+
+    # get the desired approximant
+    if approx is None:
+        # if not approximant specified just use all approximants
+        these_results = []
+        [these_results.extend(x) for x in inj_results.values()]
+    elif approx not in inj_results:
+        raise ValueError("approx %s not found in the databases in cache %s" %(
+            approx, cache_file))
+    else:
+        these_results = inj_results[approx] 
+    all_results.append(these_results)
+    labels.append(label)
+    colors.append(color)
+
+print "plotting"
+fig, _ = plot.plot_snrchi(all_results, labels=labels, colors=colors,
+    plot_newsnrs=plot_newsnrs, newsnr_cut=opts.newsnr_cut,
+    plot_reduced=opts.plot_reduced_chisq, xmin=opts.x_min, xmax=opts.x_max,
+    ymin=opts.y_min, ymax=opts.y_max) 
+figname = '%s/plotsnrchi%s.png' %(opts.output_dir, tag)
+fig.savefig(figname, dpi=opts.dpi, bbox_inches='tight')
