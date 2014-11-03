@@ -7,6 +7,11 @@ import numpy
 import lal
 
 class Result:
+    """
+    Class to store results for plot plotting.
+    To see the arguments that are stored and what can be plotted,
+    run Result.plottable_arguments()
+    """
     def __init__(self):
         self.apprx = None
         self.unique_id = None
@@ -59,12 +64,54 @@ class Result:
         return self.eta**(3./5)*self.mtotal
 
     @property
-    def tau0(self, f0 = 40):
-        return (5./(256*numpy.pi*f0*self.eta))*(numpy.pi*self.mtotal*lal.MTSUN_SI*f0)**(-5./3.)
+    def tmplt_mtotal(self):
+        return self.tmplt_m1 + self.tmplt_m2
 
     @property
+    def tmplt_q(self):
+        return self.tmplt_m1/self.tmplt_m2
+
+    @property
+    def tmplt_eta(self):
+        return self.tmplt_m1*self.tmplt_m2 / self.tmplt_mtotal**2.
+
+    @property
+    def tmplt_mchirp(self):
+        return self.tmplt_eta**(3./5)*self.tmplt_mtotal
+        
+    def tau0(self, f0 = 40):
+        return (5./(256*numpy.pi*f0*self.eta))*(numpy.pi*self.mtotal*lal.MTSUN_SI*f0)**(-5./3.)
+    
     def v0(self, f0 = 40):
         return (2*numpy.pi*f0*self.mtotal*lal.MTSUN_SI)**(1./3)
+
+    @property
+    def plottable_arguments(self):
+        """
+        Returns a string listing all plottable arguments.
+        """
+        return """
+m1: Injected mass of the larger object, in solar masses.
+m2: Injected mass of the larger object, in solar masses.
+s1z: The larger object's projection of the dimensionless spin along the orbital angular momentum.
+s2z: Same as s1z, but for the smaller body.
+mtotal: The injected total mass, in solar masses.
+q: The injected mass ratio.
+mchirp: The injected chirp mass, in solar masses.
+eta: The injected symmetric-mass ratio.
+tmplt_{m1|m2|...|eta}: The equivalent physical parameters of the best-matching template.
+eff_dist: The effective distance of the injection, in Mpc.
+dist: The injection's distance, in Mpc.
+inclination: The injection's inclination.
+effectualness: The injection's effectualness.
+snr: The measured expectation value of the SNR, as found by calc_exval.
+snr_std: The standard deviation of the expectation value of the SNR, as found by calc_exval.
+chisq: The measured expectation value of chisq, as found by calc_exval.
+chisq_dof: The number of degress of freedom of the chisq.
+chisq_std: The standard deviation of the expectation value of chisq, as found by calc_exval.
+new_snr: The measured expectation value of new SNR, as found by calc_exval.
+new_snr_std: The standard deviation of the expectation value of new_snr, as found by calc_exval.
+"""
 
 def parse_results_cache(cache_file):
     filenames = []

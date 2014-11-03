@@ -41,7 +41,7 @@ parser.add_option('-A', '--x-min', type = 'float', help = 'min x for plot')
 parser.add_option('-B', '--x-max', type = 'float', help = 'max x for plot')
 parser.add_option('-U', '--y-min', type = 'float', help = 'min y for plot')
 parser.add_option('-V', '--y-max', type = 'float', help = 'max y for plot')
-parser.add_option('-P', '--apply-cut', action = 'append', default = [], metavar = 'arg:min,max', help = 'apply cut to injections; can specify multiple times')
+parser.add_option('-P', '--apply-cut', action = 'append', default = [], metavar = 'arg:min,max', help='Only include injections that have the given argument in the given range. If specified multiple times, only injections passing all specified cuts will be plotted. The following parameters can be specified: %s' %(plot_utils.Result().plottable_arguments))
 
 opts, cache_files = parser.parse_args()
 

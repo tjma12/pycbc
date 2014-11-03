@@ -8,13 +8,17 @@ import numpy
 from pycbc import plot
 from pycbc.plot import plot_utils
 
-parser = OptionParser()
+__prog__ = 'pycbc_plot_effectualness'
+__author__ = 'Collin Capano <collin.capano@ligo.org>'
+__description__ = 'Makes scatter plots of the effectualness of a set of injections. The following can be plotted on the x and y axes: %s' %(plot_utils.Result().plottable_arguments)
+
+parser = OptionParser(description=__description__)
 parser.add_option('-c', '--cache-file', help = 'cache file containing result databases')
 parser.add_option('-W', '--weight-function', default='uniform', help="Get effectualness for the given weight function. Default is 'uniform'. The weight name provided must exist in the description column of the coinc_definer table.")
-parser.add_option('-P', '--apply-cut', action = 'append', default = [], metavar = 'arg:min,max', help = 'apply cut to injections; can specify multiple times')
+parser.add_option('-P', '--apply-cut', action = 'append', default = [], metavar = 'arg:min,max', help='Only plot injections that have the given argument in the given range. Any argument in the list of plottable parameters can be used. If specified multiple times, only injections passing all specified cuts will be plotted.')
 parser.add_option('-t', '--plot-templates', action = 'store_true', default = False, help = 'plot the templates on top of the results')
-parser.add_option('-x', '--x-val', metavar = 'args:label', help = 'x value to plot')
-parser.add_option('-y', '--y-val', metavar = 'args:label', help = 'y value to plot')
+parser.add_option('-x', '--x-val', metavar = 'args:label', help = 'x value to plot; see description for plottable arguments')
+parser.add_option('-y', '--y-val', metavar = 'args:label', help = 'y value to plot; see description for plottable arguments')
 parser.add_option('--log-x', action='store_true', default=False, help='Make x-axis log10.')
 parser.add_option('--log-y', action='store_true', default=False, help='Make y-axis log10.')
 parser.add_option('-X', '--x-lims', metavar = 'xmin,xmax', help = 'x limits to use')

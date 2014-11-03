@@ -109,7 +109,11 @@ def plot_snrchi(results, labels=[], colors=[], plot_newsnrs=[],
         else:
             clr = None
         if clr is None:
-            clr = pyplot.cm.jet(ii/float(len(results)-1))
+            if len(results) == 1:
+                clrval = 0. 
+            else:
+                clrval = ii/float(len(results)-1)
+            clr = pyplot.cm.jet(clrval)
         ax.scatter(snrs, chisqs, marker='x', s=10, c=clr, edgecolors=clr,
             label=lbl, zorder=ii, alpha=0.8)
         plot_data[lbl] = {}

@@ -8,10 +8,15 @@ import numpy
 from pycbc import plot
 from pycbc.plot import plot_utils
 
+__prog__ = 'pycbc_plot_effectualness_cumhist'
+__author__ = 'Collin Capano <collin.capano@ligo.org>'
+__description__ = 'Makes a cumulative histogram of the effectualness of a set of injections.'
+
+parser = OptionParser(description=__description__)
 parser = OptionParser()
 parser.add_option('-c', '--cache-file', help = 'cache file containing result databases')
 parser.add_option('-W', '--weight-function', default='uniform', help="Get effectualness for the given weight function. Default is 'uniform'. The weight name provided must exist in the description column of the coinc_definer table.")
-parser.add_option('-P', '--apply-cut', action = 'append', default = [], metavar = 'arg:min,max', help = 'apply cut to injections; can specify multiple times')
+parser.add_option('-P', '--apply-cut', action = 'append', default = [], metavar = 'arg:min,max', help='Only include injections that have the given argument in the given range. If specified multiple times, only injections passing all specified cuts will be plotted. The following parameters can be specified: %s' %(plot_utils.Result().plottable_arguments))
 parser.add_option('--log-y', action='store_true', default=False, help='Make y-axis log10.')
 parser.add_option('-X', '--x-lims', metavar = 'xmin,xmax', help = 'x limits to use')
 parser.add_option('-Y', '--y-lims', metavar = 'ymin,ymax', help = 'y limits to use')
