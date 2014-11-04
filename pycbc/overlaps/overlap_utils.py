@@ -926,12 +926,28 @@ class ParamWindowList(segments.segmentlist):
         insert_vals = [(self.param, self.inj_apprx, self.tmplt_apprx, pw.min_injected, pw.max_injected, min_s1z, max_s1z, min_s2z, max_s2z, pw.min_jitter, pw.max_jitter) for pw in self]
         connection.cursor().executemany(sqlquery, insert_vals)
 
-    def load_from_database(self, connection, param, inj_apprx, tmplt_apprx = 'EOBNRv2', min_s1z = None, min_s2z = None, max_s1z = None, max_s2z = None):
+    def load_from_database(self, connection, param, inj_apprx=None,
+            tmplt_apprx=None, min_s1z=None, min_s2z=None, max_s1z=None,
+            max_s2z=None):
         self.param = param
         self.inj_apprx = inj_apprx
         self.tmplt_apprx = tmplt_apprx
-        sqlquery = 'SELECT min_injected, max_injected, min_jitter, max_jitter FROM match_windows WHERE param == ? AND inj_apprx == ? AND tmplt_apprx == ?'
-        select_params = [param, inj_apprx, tmplt_apprx]
+        sqlquery = """
+            SELECT
+                min_injected, max_injected, min_jitter, max_jitter
+            FROM
+                match_windows
+            WHERE
+                param == ?"""
+        select_params = [param]
+        if self.inj_apprx is not None:
+            sqlquery += """ AND
+                inj_apprx == ?"""
+            select_params.append(self.inj_apprx)
+        if self.tmplt_apprx is not None:
+            sqlquery += """ AND
+                tmplt_apprx == ?"""
+            select_params.append(self.tmplt_apprx)
         if min_s1z is not None:
             sqlquery += ' AND min_injected_spin1z == ?'
             select_params.append(min_s1z)
@@ -945,7 +961,8 @@ class ParamWindowList(segments.segmentlist):
             sqlquery += ' AND max_injected_spin2z == ?'
             select_params.append(max_s2z)
         sqlquery += ' ORDER BY min_injected ASC'
-        for min_injected, max_injected, min_jitter, max_jitter in connection.cursor().execute(sqlquery, tuple(select_params)):
+        for min_injected, max_injected, min_jitter, max_jitter in \
+                connection.cursor().execute(sqlquery, tuple(select_params)):
             pw = ParamWindow(min_injected, max_injected)
             pw.set_jitter(min_jitter, max_jitter)
             self.append(pw)

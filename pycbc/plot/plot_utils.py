@@ -64,6 +64,10 @@ class Result:
         return self.eta**(3./5)*self.mtotal
 
     @property
+    def chi(self):
+        return (self.m1*self.s1z + self.m2*self.s2z) / self.mtotal
+
+    @property
     def tmplt_mtotal(self):
         return self.tmplt_m1 + self.tmplt_m2
 
@@ -78,6 +82,11 @@ class Result:
     @property
     def tmplt_mchirp(self):
         return self.tmplt_eta**(3./5)*self.tmplt_mtotal
+
+    @property
+    def tmplt_chi(self):
+        return (self.tmplt_m1*self.tmplt_s1z + self.tmplt_m2*self.tmplt_s2z) \
+            / self.tmplt_mtotal
         
     def tau0(self, f0 = 40):
         return (5./(256*numpy.pi*f0*self.eta))*(numpy.pi*self.mtotal*lal.MTSUN_SI*f0)**(-5./3.)
