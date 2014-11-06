@@ -306,12 +306,20 @@ for fnum, infile in enumerate(filenames):
         in connection.cursor().execute(sqlquery)])
 
     # get the templates
+    # Note: Because FD waveforms have the ability to terminate
+    # at any frequency, we'll set a maximum f final equal to
+    # the target sample rate /2 for FD approximants.
+    if lalsim.SimInspiralImplementedFDApproximants(getattr(
+            lalsim, opts.approximant)):
+        max_f_final = target_sample_rate/2
+    else:
+        max_f_final = numpy.inf
     templates = waveform_utils.TemplateDict()
     templates.get_templates(connection, opts.approximant, wfmin,
         amp_order=opts.amp_order, phase_order=opts.phase_order,
         spin_order=opts.spin_order, taper=taper,
-        calc_f_final=True, estimate_dur=True, verbose=opts.verbose,
-        only_matching=False)
+        calc_f_final=True, max_f_final=max_f_final, estimate_dur=True,
+        verbose=opts.verbose, only_matching=False)
     templates.clear_sigmas()
     if opts.verbose:
         print >> sys.stdout, "Database contains %i templates" %(
@@ -337,6 +345,10 @@ for fnum, infile in enumerate(filenames):
     injections.get_injections(connection, wfmin, archive=archive,
         calc_f_final=True, estimate_dur=True,
         verbose=opts.verbose)
+    # set the maximum f_final if the injections is an FD waveform
+    [inj.set_f_final(target_sample_rate/2) for inj in injections.values() \
+        if lalsim.SimInspiralImplementedFDApproximants(getattr(
+        lalsim, inj.approximant)) and inj.f_final > target_sample_rate /2]
     injections.clear_sigmas()
     # if vary n, set sort key
     if opts.vary_n:

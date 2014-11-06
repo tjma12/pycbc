@@ -522,11 +522,16 @@ class Waveform(object):
             The value that self.f_final is set to.
         """
         if f_final is None:
+            # fix for ROM models
+            if '_ROM_' in self.approximant:
+                use_approximant = self.approximant.split('_')[0]
+            else:
+                use_approximant = self.approximant
             f_final = lalsim.SimInspiralGetFinalFreq(
                 self.mass1*lal.MSUN_SI, self.mass2*lal.MSUN_SI,
                 self.spin1x, self.spin1y, self.spin1z,
                 self.spin2x, self.spin2y, self.spin2z,
-                getattr(lalsim, self.approximant))
+                getattr(lalsim, use_approximant))
         self._f_final = f_final
         return self._f_final 
 
@@ -1052,7 +1057,8 @@ class TemplateDict(dict):
 
     def get_templates(self, connection, approximant, f_min, amp_order=None,
             phase_order=None, spin_order=None, taper=None, archive=None,
-            calc_f_final=True, estimate_dur=True, verbose=False,
+            calc_f_final=True, max_f_final=numpy.inf, estimate_dur=True,
+            verbose=False,
             only_matching=False):
         if verbose:
             print >> sys.stdout, "getting templates from database"
@@ -1079,6 +1085,8 @@ class TemplateDict(dict):
                 spin_order=spin_order, taper=taper, **args)
             if calc_f_final:
                 tmplt.set_f_final()
+                if tmplt.f_final > max_f_final:
+                    tmplt.set_f_final(max_f_final)
             if estimate_dur:
                 # we'll use fisco as the terminating frequency
                 tmplt.set_duration(tmplt.estimate_duration(tmplt.f_min))
@@ -1452,7 +1460,7 @@ class InjectionDict(dict):
         self._as_list = None
 
     def get_injections(self, connection, f_min, archive={}, calc_f_final=True,
-            estimate_dur=True, verbose=False):
+            max_f_final=numpy.inf, estimate_dur=True, verbose=False):
         if verbose:
             print >> sys.stdout, "getting injections from database"
         self.clear()
@@ -1466,6 +1474,8 @@ class InjectionDict(dict):
             inj.f_min = f_min
             if calc_f_final:
                 inj.set_f_final()
+                if inj.f_final > max_f_final:
+                    inj.set_f_final(max_f_final)
             if estimate_dur:
                 # we'll use fisco as the terminating frequency
                 inj.set_duration(inj.estimate_duration(inj.f_min))
