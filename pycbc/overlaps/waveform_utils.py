@@ -797,12 +797,13 @@ class Waveform(object):
                     "archive and archive_id must be set."
             approximant = lalsim.GetApproximantFromString(
                 str(self.approximant))
+            # FIXME: turning this off for now since inspinj can't set this
             # check if we need to adjust the spin order
-            if self.spin_order is not None:
-                wflags = lalsim.SimInspiralCreateWaveformFlags()
-                lalsim.SimInspiralSetSpinOrder(wflags, self.spin_order)
-            else:
-                wflags = None
+            #wflags = lalsim.SimInspiralCreateWaveformFlags()
+            #lalsim.SimInspiralSetSpinOrder(wflags, self.spin_order)
+            #if lalsim.SimInspiralWaveformFlagsIsDefault(wflags):
+            #    wflags = None
+            wflags = None
             #TD waveforms
             if lalsim.SimInspiralImplementedTDApproximants(approximant):
                 hplus, hcross = lalsim.SimInspiralChooseTDWaveform(

@@ -80,7 +80,8 @@ for fnum, infile in enumerate(filenames):
         print >> sys.stdout, "Cycling over injections..."
     # get the injections
     injections = waveform_utils.InjectionDict()
-    injections.get_injections(connection, wFmin, calc_f_final=False, estimate_dur=True,
+    injections.get_injections(connection, wFmin, calc_f_final=True,
+        estimate_dur=True,
         verbose=opts.verbose)
 
     for ii, inj in enumerate(injections.as_list):
@@ -91,7 +92,8 @@ for fnum, infile in enumerate(filenames):
         # force the distance to be 1 Mpc
         inj.distance = 1.
 
-        # check if f_final exists; if so calculate the sample rate to use from that
+        # check if f_final exists; if so calculate the sample rate to use 
+        # from that
         if inj.f_final is not None:
             sample_rate = int(2**(numpy.ceil(numpy.log2(inj.f_final))+1))
         else:
