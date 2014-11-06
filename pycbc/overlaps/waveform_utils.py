@@ -882,8 +882,9 @@ class Waveform(object):
                 htilde, htilde_cross = lalsim.SimInspiralChooseFDWaveform(
                     self.phi0, 1./segment_length,
                     self.mass1 * lal.MSUN_SI, self.mass2*lal.MSUN_SI,
-                    self.spin1x, self.spin1y, self.spin1z, self.spin2x,
-                    self.spin2y, self.spin2z, self.f_min, self.f_max,
+                    self.spin1x, self.spin1y, self.spin1z,
+                    self.spin2x, self.spin2y, self.spin2z,
+                    self.f_min, self.f_max, self.f_ref,
                     self.distance * 1e6 * lal.PC_SI, self.inclination,
                     self.lambda1, self.lambda2, wflags, None,
                     self.amp_order, self.phase_order,
