@@ -780,9 +780,23 @@ class WorkSpace:
             return self.psds[filename, sample_rate, segment_length,
                 dyn_range_exp]
         except KeyError:
-            self.psds[filename, sample_rate, segment_length, dyn_range_exp] =\
-                pyPSD.from_txt(filename, (sample_rate*segment_length)/2+1,
-                1./segment_length, fmin, is_asd_file) * 2.**(2*dyn_range_exp)
+            try:
+                self.psds[filename, sample_rate, segment_length, dyn_range_exp] =\
+                    pyPSD.from_txt(filename, (sample_rate*segment_length)/2+1,
+                    1./segment_length, fmin, is_asd_file) * 2.**(2*dyn_range_exp)
+            except ValueError:
+                # if the requested max frequency is larger than the largest value in the
+                # asd file, will get an interpolation error; in that case, we'll just
+                # go up to the max frequency in the asd file, then just do infs after
+                max_freq = numpy.loadtxt(filename)[-1,0]
+                max_sample_rate = max_freq * 2
+                tmp_psd = pyPSD.from_txt(filename, (max_sample_rate*segment_length)/2+1,
+                    1./segment_length, fmin, is_asd_file)*2.**(2*dyn_range_exp)
+                psd = pytypes.FrequencySeries(numpy.zeros(sample_rate*segment_length)/2+1,
+                    delta_f=tmp_psd.delta_f)
+                psd.data[:] = numpy.inf
+                psd.data[:len(tmp_psd)] = tmp_psd.data[:]
+                self.psds[filename, sample_rate, segment_length, dyn_range_exp] = psd
             return self.psds[filename, sample_rate, segment_length,
                 dyn_range_exp]
 
