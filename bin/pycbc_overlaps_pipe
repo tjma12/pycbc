@@ -1,6 +1,6 @@
 #! /usr/bin/env python
 
-import os, sys
+import os, sys, stat
 import tempfile
 import shutil
 import copy
@@ -228,17 +228,30 @@ remainder = num_injections % injections_per_node
 #
 inj_file_tag = '%sALLINJPTS_%i' %(opts.user_tag is not None and \
     opts.user_tag+'_' or '', seed)
+inj_outfile = create_injections.get_outfilename(injections_dir, 'HL',
+    user_tag=inj_file_tag, gz=True)
 inj_cmd = construct_cmd_from_ini(cp, 'create_inj', create_inj_exec)
-inj_cmd += ' --output-dir %s --seed %i --n-points %i --user-tag %s' %(
-    injections_dir, seed, num_injections, inj_file_tag)
+# FIXME: This should be agnostic about what injection code is used,
+# but because of the way inspinj deals with time steps and number
+# of injections, I am putting an exception here
+if create_inj_exec.endswith('lalapps_inspinj'):
+    inspinj_start_time = float(cp.get('create_inj', 'gps-start-time'))
+    inspinj_time_step = float(cp.get('create_inj', 'time-step')) 
+    inspinj_end_time = int(inspinj_start_time + \
+        num_injections*inspinj_time_step)
+    inj_cmd += ' --write-compress'
+    inj_cmd += ' --seed %i --gps-end-time %i --output %s --f-lower %f' %(
+        seed, inspinj_end_time, inj_outfile,
+        float(cp.get('common', 'waveform-f-min')))
+else:
+    inj_cmd += ' --output-dir %s --seed %i --n-points %i --user-tag %s' %(
+        injections_dir, seed, num_injections, inj_file_tag)
 res = subprocess.call(inj_cmd.split(), stdout=tempoutf, stderr=tempoutf)
 if res != 0:
     raise ValueError, "Call to %s failed. Command call:\n%s" %(
         create_inj_exec, inj_cmd)
 
 # load the resulting output file
-inj_outfile = create_injections.get_outfilename(injections_dir, 'HL',
-    user_tag=inj_file_tag, gz=True)
 injdoc = utils.load_filename(inj_outfile, contenthandler=LIGOLWContentHandler,
     gz=True)
 all_injections = table.get_table(injdoc, 'sim_inspiral')
@@ -267,6 +280,9 @@ res = subprocess.call(tmp_db_cmd.split(), stdout=tempoutf, stderr=tempoutf)
 if res != 0:
     raise ValueError, "Call to %s failed. Command call:\n%s" %(
         combine_dbs_exec, tmp_db_cmd)
+# set read permissions
+st = os.stat(tmp_db)
+os.chmod(tmp_db, st.st_mode | stat.S_IRGRP | stat.S_IROTH)
 
 print "Creating threads..."
 exval_nodes = []
