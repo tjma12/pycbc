@@ -195,10 +195,17 @@ def get_injection_results(filenames, weight_function='uniform',
                 id_map[sim_id] = idx
                 idx += 1
                 thisRes.apprx = apprx
-                thisRes.m1 = m1
-                thisRes.m2 = m2
-                thisRes.s1z = s1z
-                thisRes.s2z = s2z
+                # ensure that m1 is always > m2
+                if m2 > m1:
+                    thisRes.m1 = m2
+                    thisRes.m2 = m1
+                    thisRes.s1z = s2z
+                    thisRes.s2z = s1z
+                else:
+                    thisRes.m1 = m1
+                    thisRes.m2 = m2
+                    thisRes.s1z = s1z
+                    thisRes.s2z = s2z
                 thisRes.mtotal = m1+m2
                 thisRes.eff_dist = eff_dist
                 thisRes.dist = dist
