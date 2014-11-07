@@ -94,9 +94,11 @@ def plot_effectualness(results, xarg, xlabel, yarg, ylabel,
     ax.set_xlim(plt_xmin, plt_xmax)
     ax.set_ylim(plt_ymin, plt_ymax)
 
-    ax.tick_params(axis = 'both', which = 'both', color = 'w')
-    for side in ['top', 'bottom', 'left', 'right']:
-        ax.spines[side].set_color('w')
+    # make axes white if the background is black
+    if bkgclr == 'k' or bkgclr == 'black':
+        ax.tick_params(axis='both', which='both', color='w')
+        for side in ['top', 'bottom', 'left', 'right']:
+            ax.spines[side].set_color('w')
 
     return fig, sc, plot_data
 
