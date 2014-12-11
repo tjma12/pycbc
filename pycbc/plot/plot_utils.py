@@ -19,10 +19,11 @@ class Result:
         self.m2 = None
         self.s1z = None
         self.s2z = None
-        self.eff_dist = None
-        self.dist = None
+        self.distance = None
         self.inclination = None
-        self.target_snr = None
+        self.inj_sigma = {}
+        self.inj_min_vol = None
+        self.inj_weight = None
         self.effectualness = None
         self.weight_function = None
         self.weight = None
@@ -36,7 +37,6 @@ class Result:
         self.num_samples = None
         self.database = None
         self.coinc_event_id = None
-        self.threshold = None
         self.tmplt_id = None
         self.tmplt_m1 = None
         self.tmplt_m2 = None
@@ -139,8 +139,8 @@ def get_injection_results(filenames, weight_function='uniform',
     sqlquery = """
         SELECT
             sim.waveform, sim.simulation_id,
-            sim.mass1, sim.mass2, sim.spin1z, sim.spin2z, sim.eff_dist_h,
-            sim.distance, sim.inclination, sim.eff_dist_t, tmplt.event_id,
+            sim.mass1, sim.mass2, sim.spin1z, sim.spin2z,
+            sim.distance, sim.inclination, tmplt.event_id,
             tmplt.mass1, tmplt.mass2, tmplt.spin1z, tmplt.spin2z,
             res.effectualness, res.snr, res.snr_std,
             tw.weight, res.chisq, res.chisq_std, res.chisq_dof, res.new_snr,
@@ -182,13 +182,15 @@ def get_injection_results(filenames, weight_function='uniform',
             continue
         connection = sqlite3.connect(thisfile)
         id_map = {}
+        id_map2 = {}
+        cursor = connection.cursor()
         try:
-            for (apprx, sim_id, m1, m2, s1z, s2z, eff_dist, dist, inc,
-                    target_snr, tmplt_evid, tmplt_m1, tmplt_m2, tmplt_s1z,
+            for (apprx, sim_id, m1, m2, s1z, s2z, dist, inc,
+                    tmplt_evid, tmplt_m1, tmplt_m2, tmplt_s1z,
                     tmplt_s2z, ff, snr,
                     snr_std, weight, chisq, chisq_std, chisq_dof, new_snr,
                     new_snr_std, nsamp, sample_rate, ceid) in \
-                    connection.cursor().execute(sqlquery, (weight_function,)):
+                    cursor.execute(sqlquery, (weight_function,)):
                 results.setdefault(apprx, [])
                 thisRes = Result()
                 thisRes.unique_id = idx
@@ -207,10 +209,8 @@ def get_injection_results(filenames, weight_function='uniform',
                     thisRes.s1z = s1z
                     thisRes.s2z = s2z
                 thisRes.mtotal = m1+m2
-                thisRes.eff_dist = eff_dist
-                thisRes.dist = dist
+                thisRes.distance = dist
                 thisRes.inclination = inc
-                thisRes.target_snr = target_snr
                 thisRes.tmplt_id = tmplt_evid
                 thisRes.tmplt_m1 = tmplt_m1
                 thisRes.tmplt_m2 = tmplt_m2
@@ -230,11 +230,38 @@ def get_injection_results(filenames, weight_function='uniform',
                 thisRes.sample_rate = sample_rate
                 thisRes.database = thisfile
                 thisRes.coinc_event_id = ceid
+                id_map2[apprx, sim_id] = len(results[apprx])
                 results[apprx].append(thisRes)
+
+            # try to get the sim_inspiral_params table
+            tables = cursor.execute(
+                'SELECT name FROM sqlite_master WHERE type == "table"'
+                ).fetchall()
+            if ('sim_inspiral_params',) in tables:
+                sqlquery = """
+                    SELECT
+                        sip.simulation_id, inj.waveform, sip.ifo, sip.sigmasq,
+                        sip.min_vol, sip.weight
+                    FROM
+                        sim_inspiral_params AS sip
+                    JOIN
+                        sim_inspiral AS inj
+                    ON
+                        inj.simulation_id == sip.simulation_id
+                    """
+                for simid, apprx, ifo, sigmasq, min_vol, w in cursor.execute(
+                        sqlquery):
+                    thisRes = results[apprx][id_map2[apprx, simid]]
+                    thisRes.inj_sigma[ifo] = numpy.sqrt(sigmasq)
+                    thisRes.inj_min_vol = min_vol
+                    thisRes.inj_weight = weight
+
         except sqlite3.OperationalError:
+            cursor.close()
             connection.close()
             continue
         except sqlite3.DatabaseError:
+            cursor.close()
             connection.close()
             print "Database Error: %s" % thisfile
             continue

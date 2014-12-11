@@ -455,7 +455,7 @@ class Waveform(object):
         'amp_order', 'phase_order', 'spin_order', 'tidal_order',
         'approximant', 'taper', 'eccentricity',
         # derived parameters
-        'sigma', '_duration', '_f_final',
+        '_sigmas', '_duration', '_f_final',
         # archive parameters
         '_archive', '_archive_id']
 
@@ -483,6 +483,7 @@ class Waveform(object):
             self.phase_order = 7
         if self.taper is None:
             self.taper = 'TAPER_NONE'
+        self._sigmas = {}
    
     # derived parameters 
     @property
@@ -609,6 +610,15 @@ class Waveform(object):
             return int(2**(numpy.ceil(numpy.log2(self._duration)+1)))
         except AttributeError:
             raise ValueError("duration not set")
+
+    def set_sigma(self, ifo, sigma):
+        self._sigmas[ifo] = sigma
+
+    def sigma(self, ifo):
+        return self._sigmas[ifo]
+
+    def clear_sigmas(self):
+        self._sigmas.clear()
 
 
     # archive related
@@ -1099,9 +1109,9 @@ class TemplateDict(dict):
 
     def clear_sigmas(self):
         """
-        Ensures sigma of every template is set to None.
+        Ensures sigma of every template clear.
         """
-        [setattr(inj, 'sigma', None) for inj in self.values()]
+        [tmplt.clear_sigmas() for tmplt in self.values()]
 
     def set_sort_key(self, key):
         """
@@ -1132,10 +1142,11 @@ class Injection(Waveform):
     """
     _injparams = ['ra', 'dec', 'polarization', 'geocent_end_time',
         'geocent_end_time_ns', 'simulation_id']
-    __slots__ = Waveform.__slots__ + _injparams + ['_epochs']
+    __slots__ = Waveform.__slots__ + _injparams + ['_epochs', '_weights']
     # note: _epochs, which is a dictionary, is needed for quickly
     # retrieving unsegmented waveforms from an archive; see get_td_waveform,
     # below
+    # _weights stores the weights to be applied when calculating efficiency
 
     def __init__(self, **kwargs):
         # make new parameters required inputs, along with distance
@@ -1152,6 +1163,7 @@ class Injection(Waveform):
             raise ValueError, "geocent_end_time must be an integer"
         if not isinstance(self.geocent_end_time_ns, int):
             raise ValueError, "geocent_end_time_ns must be an integer"
+        self._weights = {}
         # make _epochs a dict
         self._epochs = {}
 
@@ -1167,6 +1179,14 @@ class Injection(Waveform):
         return self.geocent_time + lal.TimeDelayFromEarthCenter(
             detector.location, self.ra, self.dec, self.geocent_time)
 
+    def set_weights(self, ifo, w1=None, w2=None):
+        self._weights[ifo] = (w1, w2)
+
+    def get_weights(self, ifo):
+        return self._weights[ifo]
+
+    def clear_weights(self):
+        return self._weights.clear()
 
     def del_from_archive(self, sample_rate, segment_length, ifo, segment_start,
             dtype, del_unsegmented=True):
@@ -1211,7 +1231,7 @@ class Injection(Waveform):
             into. The injection time-series will be 0-padded to the needed
             length.
         ifo: string or None
-            The that the waveform is being injected to. If set to None, no
+            The ifo that the waveform is being injected to. If set to None, no
             detector response will be applied.
         segment_start: float or LIGOTimeGPS
             The GPS time of the start of the segment at the given ifo. The
@@ -1443,14 +1463,13 @@ class InjectionDict(dict):
         'longitude': 'ra',
         'polarization': 'polarization',
         'phi0': 'phi0',
-        'theta0': 'inclination',
+        'inclination': 'inclination',
         'amp_order': 'amp_order',
         'f_final': '_f_final',
         'taper': 'taper',
         'waveform': 'approximant',
         'simulation_id': 'simulation_id',
         # FIXME: fix these kludges when new tables are used 
-        'eff_dist_t': 'sigma',
         'alpha': 'duration',
         'numrel_mode_min': 'phase_order',
         'numrel_mode_max': 'spin_order'
@@ -1485,11 +1504,40 @@ class InjectionDict(dict):
             # add to self
             self[inj.simulation_id] = inj
 
+        # get information from sim_inspiral_params table if it exists
+        tables_in_db = sqlutils.get_tables_in_database(connection)
+        if 'sim_inspiral_params' in tables_in_db:
+            # the sim_inspiral_params table may or may not have weights; so
+            # we check
+            get_columns = ['simulation_id', 'ifo', 'sigmasq']
+            columns = sqlutils.get_column_names_from_table(connection,
+                'sim_inspiral_params')
+            if 'weight1' in columns:
+                get_columns.append('weight1')
+            else:
+                get_columns.append('NULL')
+            if 'weight2' in columns:
+                get_columns.append('weight2')
+            else:
+                get_columns.append('NULL')
+            sqlquery = '''
+                SELECT
+                    ''' + ', '.join(get_columns) + '''
+                FROM
+                    sim_inspiral_params
+                    '''
+            for simid, ifo, sigmasq, w1, w2 in connection.cursor().execute(
+                    sqlquery):
+                inj = self[simid]
+                inj.set_sigma(ifo, numpy.sqrt(sigmasq))
+                inj.set_weights(ifo, w1, w2)
+
+
     def clear_sigmas(self):
         """
         Ensures sigma of every injection is set to None.
         """
-        [setattr(inj, 'sigma', None) for inj in self.values()]
+        [inj.clear_sigmas() for inj in self.values()]
 
     def set_sort_key(self, key):
         """

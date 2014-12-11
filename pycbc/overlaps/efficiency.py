@@ -152,41 +152,18 @@ class PHyperCube:
         self.d_distr = d_distr
 
 
-    def integrate_efficiencies(self):
-        if self.efficiencies == []:
-            raise ValueError("self.efficiencies is empty! " +\
-                "Run self.calculate_efficiency first")
-        if self.d_distr == 'linear':
-            this_dist = self.distances[:-1] + numpy.diff(self.distances)/2.
-            dr = numpy.diff(self.distances)
-            self.integrated_eff = 4*numpy.pi*(
-                    self.efficiencies * this_dist**2 * dr).sum() + \
-                (4./3)*numpy.pi*self.distances[0]**3
-            # error
-            self.integrated_err_low = 4*numpy.pi*numpy.sqrt(((
-                self.eff_err_low * this_dist**2 * dr)**2).sum())
-            self.integrated_err_high[group] = 4*numpy.pi*numpy.sqrt(((
-                self.eff_err_high * this_dist**2 * dr)**2).sum())
-        elif self.d_distr == 'log10':
-            this_dist = 10**(numpy.log10(self.distances[:-1]) + \
-                numpy.diff(numpy.log10(self.distances))/2)
-            # in this case we use:
-            # int(eff) = \int eff(r) r**2 \dr =
-            #   ln10 \int eff(log10 r) r**3 \dlog10r
-            dr = numpy.diff(numpy.log10(self.distances))
-            self.integrated_eff = numpy.log(10)*(4.*numpy.pi * \
-                self.efficiencies * this_dist**3 * dr).sum() + \
-                4*numpy.pi*(1./3)*self.distances[0]**3
-            # error
-            # note that in the following we're assuming the error in the
-            # efficiency below and above the measured region is 0
-            self.integrated_err_low = 4.*numpy.pi*numpy.sqrt((( \
-                self.eff_err_low * this_dist**3 * dr)**2).sum())
-            self.integrated_err_high = 4.*numpy.pi*numpy.sqrt((( \
-                self.eff_err_high * this_dist**3 * dr)**2).sum())
-        else:
-            raise ValueError('unrecognized distance distribution %s' %(
-                self.d_distr))
+    def integrate_efficiency(self, threshold,
+            ranking_stat='new_snr', rank_by='max'):
+        """
+        Integrates the efficiency in self's bounds to get a measure of the
+        sensitive volumes.
+        """
+        integrand = numpy.array([x.min_vol + x.weight * \
+            float(isfound(x, threshold, ranking_stat, rank_by)) \
+            for x in self.data])
+        self.integrated_eff = integrand.mean()
+        self.integrated_eff_err_low = self.integrated_eff_err_high = \
+            integrand.std()
 
 
 class PHyperCubeGain:

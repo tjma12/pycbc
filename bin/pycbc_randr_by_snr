@@ -26,6 +26,40 @@ from pycbc import filter
 from pycbc.overlaps import waveform_utils
 from pycbc.overlaps import overlap_utils
 
+def create_sim_params_table(connection, delete_old=True):
+    crs = connection.cursor()
+    if delete_old:
+        crs.execute('DROP TABLE IF EXISTS sim_inspiral_params')
+    sqlquery = """
+        CREATE TABLE IF NOT EXISTS
+            sim_inspiral_params
+            (simulation_id, ifo, event_time, event_time_ns, sigmasq,
+            min_vol, weight);
+        CREATE INDEX IF NOT EXISTS
+            sip_sid_idx
+        ON
+            sim_inspiral_params (simulation_id);
+        """
+    crs.executescript(sqlquery)
+
+def r_uniform_in_volume(r1, r2, N):
+    xi = numpy.random.uniform(0., 1., size=N)
+    return (xi*r2**3. + (1.-xi)*r1**3.)**(1./3)
+
+def r_uniform_in_distance(r1, r2, N):
+    return numpy.random.uniform(r1, r2, size=N)
+
+def get_weights(distribution, r, r1, r2):
+    if distribution == "volume":
+        min_vol = (4./3)*numpy.pi*r1**3.
+        weight = (4./3)*numpy.pi*(r2**3. - r1**3.)
+    elif distribution == "distance":
+        min_vol = (4./3)*numpy.pi*r1**3.
+        weight = 4.*numpy.pi*(r2-r1) * r**2. 
+    else:
+        raise ValueError("unrecognized distribution %s" %(distribution))
+    return min_vol, weight
+
 parser = OptionParser(description = __description__)
 parser.add_option("-t", "--tmp-space", action = "store", type = "string", default = None, metavar = "PATH", help = "Location of local disk on which to do work. This is used to enhance performance in a networked environment.")
 parser.add_option("-p", "--psd-model", help = "What PSD to use for overlaps. Options are %s." %(', '.join(overlap_utils.get_psd_models())))
@@ -33,10 +67,10 @@ parser.add_option("-A", "--asd-file", help = "Load the PSD from a dat file conta
 parser.add_option('-f', '--waveform-f-min', type = 'float', help = "Frequency at which to start the waveform generation (in Hz).")
 parser.add_option('-F', '--overlap-f-min', type = 'float', help = "Frequency at which to start the overlap (in Hz). Note: This must be larger than waveform-f-min.")
 parser.add_option('-r', '--default-sample-rate', type = 'int', default = 4096, help = "Default sample rate to use (in Hz). Must be a power of 2. Only needed if injections' f_final column is not populated. If they are populated, the smallest sample rate giving a Nyquist frequency greater than the f_final of each injection will be used. Default is 4096.")
-parser.add_option('-U', '--user-tag', help = "User tag to add to all Overlap files.")
+parser.add_option('-i', '--ifo', help = "What ifo to inject into. If none specified, no response function will be applied to the injections, and the inclination angle will be set to 0 for all injections.")
 parser.add_option('-s', '--min-snr', type = 'float', help = 'Set the minimum SNR to use.')
 parser.add_option('-S', '--max-snr', type = 'float', help = 'Set the maximum SNR to use; must be larger than min-snr. To use an exact snr, set to the same value as min-snr.')
-parser.add_option('-d', '--distribution', default = 'linear', help = 'What distribution to use for the snrs. Options are either linear, or log10. Default is linear.')
+parser.add_option('-d', '--distribution', default = 'distance', help = 'What distribution to make the injections uniform in. Options are "distance" or "volume"; if the former, the distance distribution of the injections will be uniform in distance; if the latter, uniform in volume. Default is distance.')
 parser.add_option('', '--seed', type = 'int', default = int((time.time()*100)% 1e6), help = 'Set the seed to use for the random number generator. If none specified, will use the current time.')
 parser.add_option('-v', '--verbose', action = 'store_true', help = 'Be verbose.')
 
@@ -54,6 +88,11 @@ if opts.asd_file is None and opts.psd_model is None:
     raise ValueError, "must specify --asd-file or --psd-model"
 if opts.asd_file is not None and not os.path.exists(opts.asd_file):
     raise ValueError, "asd-file %s not found" % opts.asd_file
+ifo = opts.ifo
+if opts.ifo is not None:
+    ifo = ifo.upper()
+    if len(ifo) != 2:
+        raise ValueError("--ifo must be of format [site][number], e.g., 'H1'")
 
 random.seed(opts.seed)
 
@@ -68,12 +107,22 @@ for fnum, infile in enumerate(filenames):
     if opts.verbose:
         print >> sys.stdout, "Analyzing file %s" % infile
     # connect to input
-    working_filename = dbtables.get_connection_filename(infile, opts.tmp_space, verbose = opts.verbose)
+    working_filename = dbtables.get_connection_filename(infile, opts.tmp_space,
+        verbose=opts.verbose)
     connection = sqlite3.connect(working_filename)
     if opts.tmp_space:
-        dbtables.set_temp_store_directory(connection, opts.tmp_space, verbose = opts.verbose)
+        dbtables.set_temp_store_directory(connection, opts.tmp_space,
+            verbose=opts.verbose)
+    # we'll drop the sim_inspiral param table to clear results from earlier
+    # runs. We do this now because dbtables currently has a problem with
+    # tables it doesn't recognize
+    connection.cursor().execute('DROP TABLE IF EXISTS sim_inspiral_params')
     xmldoc = dbtables.get_xml(connection)
-    this_process = process.register_to_xmldoc(xmldoc, __prog__, opts.__dict__)
+    this_process = process.register_to_xmldoc(xmldoc, __prog__,
+        opts.__dict__)
+
+    # create a sim_params table to store the weights
+    create_sim_params_table(connection, delete_old=True)
 
     # cycle over the injections, calculating results for each
     if opts.verbose:
@@ -92,6 +141,10 @@ for fnum, infile in enumerate(filenames):
         # force the distance to be 1 Mpc
         inj.distance = 1.
 
+        # if ifo is None, force the inclination to be 0.
+        if ifo is None:
+            inj.inclination = 0.
+
         # check if f_final exists; if so calculate the sample rate to use 
         # from that
         if inj.f_final is not None:
@@ -107,7 +160,7 @@ for fnum, infile in enumerate(filenames):
             seg_length = 2
         df = 1./seg_length
       
-        htilde = inj.get_fd_waveform(sample_rate, seg_length, None,
+        htilde = inj.get_fd_waveform(sample_rate, seg_length, ifo,
             inj.geocent_end_time - seg_length/2, store=False)
 
         # get the psd and needed workspace vectors
@@ -124,32 +177,64 @@ for fnum, infile in enumerate(filenames):
         # get the distance limits corresponding to the desired SNR range
         min_dist = sigma / opts.max_snr
         max_dist = sigma / opts.min_snr
-        if opts.distribution == "log10":
-            distance = 10**random.uniform(numpy.log10(min_dist), numpy.log10(max_dist))
+        # get a distance to use, and the weights
+        if opts.distribution == "volume":
+            distance = r_uniform_in_volume(min_dist, max_dist, 1)[0]
+        elif opts.distribution == "distance":
+            distance = r_uniform_in_distance(min_dist, max_dist, 1)[0]
         else:
-            distance = random.uniform(min_dist, max_dist)
+            raise ValueError("unrecognized --distribution %s; " %(
+                opts.distribution), "see --help for options")
         
+        # get the weights that will need to be applied when
+        # computing efficiency
+        min_vol, weight = get_weights(opts.distribution, distance, min_dist,
+            max_dist)
+        # if the ifo is None, we also need to divide by 2.26 to account for
+        # the peanut shell
+        if ifo is None:
+            min_vol /= 2.26
+            weight /= 2.26
+
         # save to the database; in an abuse of columns, we'll store
-        # sigma to eff_dist_t and the injection duration to alpha;
+        # the injection duration to alpha;
+        # we'll also update the inclination, in case it was set to 0.
+        crs = connection.cursor()
         sqlquery = '''
             UPDATE
                 sim_inspiral
             SET
                 distance = %f,
-                eff_dist_t = %f,
+                inclination = %f,
                 alpha = %f
             WHERE simulation_id == "%s"'''
-        sqlquery = sqlquery %(distance, sigma, inj.duration, inj.simulation_id)
-        connection.cursor().execute(sqlquery)
-        connection.commit()
+        sqlquery = sqlquery %(distance, inj.inclination, inj.duration,
+            inj.simulation_id)
+        crs.execute(sqlquery)
+
+        # save the weights
+        end_time = inj.detector_end_time(ifo)
+        sqlquery = '''
+            INSERT INTO
+                sim_inspiral_params
+                (simulation_id, ifo, event_time, event_time_ns, sigmasq,
+                 min_vol, weight)
+            VALUES
+                (?, ?, ?, ?, ?, ?, ?)'''
+        crs.execute(sqlquery, (inj.simulation_id, ifo,
+            end_time.gpsSeconds, end_time.gpsNanoSeconds,
+            sigma**2., min_vol, weight))
 
     if opts.verbose:
         print >> sys.stdout, ""
         sys.stdout.flush()
 
     # save the database
+    crs.close()
+    connection.commit()
     connection.close()
-    dbtables.put_connection_filename(infile, working_filename, verbose=opts.verbose)
+    dbtables.put_connection_filename(infile, working_filename,
+        verbose=opts.verbose)
 
 if opts.verbose:
     print >> sys.stdout, "Finished!"
