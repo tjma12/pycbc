@@ -5,6 +5,8 @@ import math
 import sqlite3
 import numpy
 import lal
+import matplotlib
+from matplotlib import pyplot
 
 def get_signum(val, err, max_sig = numpy.inf):
     """
@@ -487,46 +489,59 @@ class ClickableElement:
         self._pixelcoords = coords
 
 
-class MappableFigure:
+class MappableFigure(matplotlib.figure.Figure):
     """
-    Class to store various elements of a matplotlib figure to make it easier
-    to create an image map for it. The class has a get_pixelcoordinates
-    function which will automatically get the pixel coordinates of all desired
-    clickable elements formatted in the correct way for an image map. The class
-    also has a savefig function. This should be used instead of the figure's
-    savefig, as it ensures that the proper coordinate transformations are
-    carried out to get the pixel coordinates when the figure is renderred.
+    A derived class of pyplot.figure.Figure, this adds additional
+    attributes to Figure to make it easier to create an image map for it. The
+    class has a get_pixelcoordinates function which will automatically get the
+    pixel coordinates of all desired clickable elements formatted in the
+    correct way for an image map. The class also has a savefig function that
+    replace's the base class's savefig. This ensures that the proper
+    coordinate transformations are carried out to get the pixel coordinates
+    when the figure is renderred.
 
-    Parameters
-    ----------
-    figure: matplotlib.figure.Figure instance
-        The figure for which an image map may be created.
+    Additional Parameters
+    ---------------------
     figure_filename: str
-        The name of the file the figure is saved to.
+        The name of the file the figure is saved to. This is set when savefig
+        is called.
+    saved_img_height: float
+        The height of the figure's image in pixels when it is saved, set
+        when savefig is called. This is needed for getting the proper
+        coordinate locations when creating an image map. 
+    saved_img_width: float
+        Same as saved_img_height, but for width.
     clickable_elements: list
-        A list of ClickableElement instances for which clickable areas will
-        be created in an image map. All of the elements must be in figure.
-        To ensure this, a list may only be added via the set_clickable_elements
-        function. To add more elements, use the add_clickable function.
+        A list of ClickableElement instances for which clickable areas will be
+        created in an image map. All of the plot elements drawn on an axes
+        that is attached to the figure.  To ensure this, a list may only be
+        added via the set_clickable_elements function. To add more elements,
+        use the add_clickable function.
     """
-    figure = None
     _figure_filename = None
+    _saved_img_height = None
+    _saved_img_width = None
     _clickable_elements = []
 
-    def __init__(self, figure, clickable_elements=None):
-        self.figure = figure
+    def __init__(self, *args, **kwargs):
+        """
+        Initializes _figure_filename, _saved_img_height, and _saved_img_width
+        as None and _clickable_elements as an empty list. It then calls the
+        base class's __init__ with the args and kwargs.
+        """
         self._figure_filename = None
-        if clickable_elements is None:
-            self._clickable_elements = []
-        else:
-            self.set_clickable_elements(clickable_elements)
+        self._saved_img_height = None
+        self._saved_img_width = None
+        self._clickable_elements = []
+        # now initialize the figure
+        super(MappableFigure, self).__init__(*args, **kwargs)
 
     def check_clickable_element(self, clickable):
         """
         Checks that the given clickable's element is in self's figure.
         If it is not, a ValueError is raised.
         """
-        if clickable.element.figure != self.figure:
+        if clickable.element.figure != self:
             raise ValueError("clickable is not an element in self's figure")
 
     def add_clickable(self, clickable):
@@ -541,15 +556,25 @@ class MappableFigure:
     def clickable_elements(self):
         return self._clickable_elements
 
+    @property
+    def saved_img_height(self):
+        return self._saved_img_height
+
+    @property
+    def saved_img_width(self):
+        return self._saved_img_width
+
     def get_pixel_coordinates(self, event):
         """
         Function to get the pixel coordinates of the clickable elements
         when the figure is saved.
         """
-        #fig = event.canvas.figure
-        #ax = fig.axes[0]
+        self._saved_img_height = self.bbox.height
+        self._saved_img_width = self.bbox.width
         for clickable in self._clickable_elements:
             ax = clickable.element.axes
+            if ax not in self.axes:
+                raise ValueError("clickable is not on an axes in this figure")
             pixel_coordinates = ax.transData.transform(clickable.element.xy)
             # pixel cooredinates are a 2D array; the first column is the
             # x coordinates, the second, the y coordinates
@@ -557,7 +582,7 @@ class MappableFigure:
             # of the image, whereas matplotlib measures y from the bottom
             # of this image. For this reason, we have to adjust the y
             pixel_coordinates[:,1] *= -1.
-            pixel_coordinates[:,1] += self.figure.bbox.height
+            pixel_coordinates[:,1] += self.bbox.height
             clickable.set_pixelcoords(pixel_coordinates)
 
     def savefig(self, filename, **kwargs):
@@ -567,12 +592,23 @@ class MappableFigure:
         when the figure is rendered for saving to ensure the proper
         coordinates are retrieved. For more information, see:
         http://stackoverflow.com/a/4672015
+
+        Also: the bbox_inches='tight' argument is not allowed if there are
+        clickable elements, as this does not properly update the transformation
+        matrices when the figure is trimmed (as of matplotlib version 1.4.1).
         """
-        cid = self.figure.canvas.mpl_connect('draw_event',
-            self.get_pixel_coordinates)
+        if 'bbox_inches' in kwargs and kwargs['bbox_inches'] == 'tight' and \
+                self._clickable_elements != []:
+            raise ValueError("bbox_inches=tight is not allowed when saving " +\
+                "a mappable figure with clickable elements, as it will " +\
+                "silently alter the pixel coordinates in the saved image. " +\
+                "If you would like to save without the clickable elements, " +\
+                "remove the clickable_elements on self [run " +\
+                "self.set_clickable_elements([])], or use pyplot.savefig.")
+        cid = self.canvas.mpl_connect('draw_event', self.get_pixel_coordinates)
         self._figure_filename = filename
-        self.figure.savefig(filename, **kwargs)
-        self.figure.canvas.mpl_disconnect(cid)
+        super(MappableFigure, self).savefig(filename, **kwargs)
+        self.canvas.mpl_disconnect(cid)
 
     @property
     def saved_filename(self):
@@ -581,7 +617,7 @@ class MappableFigure:
         """
         return self._figure_filename
 
-    def create_image_map(self, html_filename, view_width=750,
+    def create_image_map(self, html_filename, view_width=1000,
             view_height=None):
         """
         Creates an image map of self. The pixelcoords and links of every
@@ -613,7 +649,20 @@ class MappableFigure:
         return _plot2imgmap(self, html_filename, view_width, view_height)
             
 
-def _plot2imgmap(mappable_figure, html_filename, view_width=750,
+def figure(**kwargs):
+    """
+    Wrapper around pyplot's figure function that substitutes a
+    matplotlib.figure.Figure with a MappableFigure in FigureClass.
+    """
+    if 'FigureClass' in kwargs:
+        raise ValueError("this function only supports " +\
+            "FigureClass=MappableFigure; use pyplot.figure() if you wish " +\
+            "to use a different FigureClass")
+    kwargs['FigureClass'] = MappableFigure
+    return pyplot.figure(**kwargs)
+
+
+def _plot2imgmap(mfig, html_filename, view_width=1000,
         view_height=None):
     """
     Creates the necessary html code to display a figure with an image map
@@ -621,15 +670,15 @@ def _plot2imgmap(mappable_figure, html_filename, view_width=750,
 
     Parameters
     ----------
-    mappable_figure: MappableFigure instance
+    mfig: MappableFigure instance
         A instance of a MappableFigure. The clickable_elements list must
         be populated, and the figure must have been saved to a file via
-        the mappable_figure's savefig function.
+        the mfig's savefig function.
     html_filename: str
         The file name of the html page that the image map will be placed
         in. This is needed so that the proper relative path to the figure's
         file name and the links can be constructed.
-    view_width: {750, int}
+    view_width: {1000, int}
         The width, in pixels, of the displayed image. To use the original
         size of the image, pass None.
     view_height: {None, int}
@@ -644,16 +693,15 @@ def _plot2imgmap(mappable_figure, html_filename, view_width=750,
         HTML code describing the image link. This can be added to an
         html file to show the image map.
     """
-    if mappable_figure.saved_filename is None:
-        raise ValueError("mappable_figure's saved_filename is None! Run " +
-            "mappable_figure's savefig to save the figure to disk.")
-    figname = mappable_figure.saved_filename
+    if mfig.saved_filename is None:
+        raise ValueError("mfig's saved_filename is None! Run " +
+            "mfig's savefig to save the figure to disk.")
+    figname = mfig.saved_filename
     # we need the fig filename relative to the html page's path
     figname = os.path.relpath(os.path.abspath(figname),
         os.path.dirname(os.path.abspath(html_filename)))
-    fig = mappable_figure.figure
-    img_height = int(fig.bbox.height)
-    img_width = int(fig.bbox.width)
+    img_height = int(mfig.saved_img_height)
+    img_width = int(mfig.saved_img_width)
     # get the scale factors we need for the given view width and height
     scale_x = 1.
     scale_y = 1.
@@ -676,7 +724,7 @@ def _plot2imgmap(mappable_figure, html_filename, view_width=750,
     # construct the areas
     areas = []
     area_tmplt = '<area shape="%s" coords="%s" href="./%s" %s />'
-    for clickable in mappable_figure.clickable_elements:
+    for clickable in mfig.clickable_elements:
         if clickable.shape == 'rect' or clickable.shape == 'poly':
             # for rectangle or polygon, the coordinates are just
             # x1,y1,x2,y2,...,xn,yn, where n=4 for rect
@@ -716,89 +764,3 @@ def _plot2imgmap(mappable_figure, html_filename, view_width=750,
 """
     return tmplt %(figname, mapname, width_str, height_str, mapname,
         '\n'.join(areas))
-
-
-def plot2imgmap(ax, links, shape, figname, view_width=750, tags=[]):
-    """
-    Given a matplotlib plot, creates the necessary html to make the figure
-    an image map.
-
-    Parameters
-    ----------
-    ax: matplotlib axes
-        The axes in containing the data which we want to create links for.
-    links: list of tuples
-        The elements of the links list should be tuples containing the data
-        coordinates that the link should cover, and the page to link to. If
-        shape is 'rect' the coordinates should be of the top left and bottom
-        right corners of the link. If shape is 'circle', the coordinates should
-        be the x,y coordinates. For example, if shape='rect', links would be:
-        ::
-            links = [((x1_tl, y1_tl), (x1_br, y1_br), link1),
-                     ((x2_tl, y2_tl), (x2_br, y2_br), lin2), ...]
-        If shape='circle', links would be:
-            links = [(x1, y1, link1), (x2, y2, link2), ...]
-    shape: {'rect' | 'circle'}
-        The shape of the link to create. Options are either 'circle' or 'rect'.
-    figname: str
-        The filename of the plot that the figure was saved to.
-    view_width: {int, 1000}
-        How wide the saved figure should be displayed on the html page.
-    tags: {list, []}
-        Optional add tags that will appear when each image link is hovered over
-        with the mouse. If specified, the length of tags must be the same as
-        links.
-
-    Returns
-    -------
-    html: str
-        A block of html code containing the image map and the plot. This can
-        be inserted into a file to display the figure.
-    """
-    fig = ax.get_figure()
-    dpi = fig.get_dpi()
-    print dpi, fig.get_figwidth()
-    img_height = fig.get_figheight() * dpi
-    img_width = fig.get_figwidth() * dpi
-    if view_width is None:
-        view_width = img_width
-    scalefac = float(view_width)/img_width
-    print view_width, img_width, scalefac
-
-    if tags == []:
-        tags = ['' for link in links]
-
-    # transform the coordinates of the data into display coordinates
-    trans = ax.transData
-    if shape == 'rect':
-        img_coords = [(trans.transform(coord1), trans.transform(coord2), link)
-            for (coord1, coord2, link) in links]
-    elif shape == 'circle':
-        img_coords = [(trans.transform([x,y]), link) for (x, y, link) in links]
-    else:
-        raise ValueError, 'Unrecognized shape %s' % shape
-
-    tmplt = """
-<div>
-<img src="%s" class="mapper" usemap="#%s" border="0" width="%i">
-</div>
-<map name="%s">
-%s
-</map>
-"""
-    if shape == 'rect':
-        maptmplt = '<area shape="rect" coords="%i,%i,%i,%i", href="%s" ' +\
-            'alt="%s" title="%s">'
-        maps = [maptmplt  %(scalefac*ix1, scalefac*(img_height - iy1),
-            scalefac*ix2, scalefac*(img_height - iy2), link, tag, tag) \
-            for (((ix1,iy1), (ix2, iy2),link),tag) in zip(img_coords,tags)]
-    else:
-        maptmplt = '<area shape="circle" coords="%i,%i,5" href="%s" ' +\
-            'alt="%s" title="%s">'
-        maps = [maptmplt %(scalefac*ix, scalefac*(img_height - iy),
-            link, tag, tag) for (((ix,iy), link), tag) in \
-            zip(img_coords, tags)]
-    # construct the map name from the figname
-    mapname = os.path.basename(figname)[:-4]
-
-    return tmplt %(figname, mapname, view_width, mapname, '\n'.join(maps))
