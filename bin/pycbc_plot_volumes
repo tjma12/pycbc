@@ -1,0 +1,158 @@
+#! /usr/bin/env python
+
+__prog__ = "pycbc_plot_volumes"
+__author__ = "Collin Capano <collin.capano@ligo.org>"
+__description__ = \
+"""Creates plots of sensitive volumes as well as summary pages. Will also
+gather plots from other progams and place them on the summary pages."""
+
+import os, sys, shutil
+from optparse import OptionParser
+import numpy
+from pycbc.plot import plot_utils
+from pycbc.plot import efficiency
+from pycbc.plot import plot_volumes
+
+
+parser = OptionParser()
+parser.add_option('-c', '--cache-file', help='Required. Cache file containing result databases.')
+parser.add_option('-l', '--layer-config-file', help='Required. A config file containing the layer parameters to use.') 
+parser.add_option('-T', '--threshold', type='float', help='Required. The value of the ranking stat to use as the threshold when computing efficiencies.')
+parser.add_option('-R', '--ranking-stat', default='new_snr', help='The ranking stat to use for computing efficiency. Default is new_snr.')
+parser.add_option('-B', '--rank-by', default='max', help='Options are "max" or "min". If max (min) an injection will be considered found if its ranking stat is >= (<) the threshold. Default is max.')
+parser.add_option('-N', '--min-ninj', type='int', default=1, help='Minimum number of injections that must exist in a block in in order to calculate volume. If a block has less then this, it will be skipped. Default is 1.')
+parser.add_option('-p', '--subplots-cache', help='Load subplots for each tile from the given cache file.')
+parser.add_option('-o', '--output-dir', help='Directory to save results to.')
+parser.add_option('-u', '--user-tag', default='', help='Add a user tag to all output files.')
+parser.add_option('', '--colormap', default='hot', help='What color map to use for fractional gain plots. Default is hot.')
+parser.add_option('', '--minvol', type='float', default=None, help='Minimum volume to color. Default is to use whatever the minium volume found is.')
+parser.add_option('', '--maxvol', type='float', default=None, help='Maximum volume to color. Default is to use whatever the maximum volume found is.')
+parser.add_option('', '--fontsize', type='int', default=8, help='Fontsize to use in volume plots. Default is 8.')
+parser.add_option('', '--logz', action='store_true', default=False, help='Make coloring log10.')
+parser.add_option('', '--dpi', type='int', default=300, help='dpi to use for plots; default is 300')
+parser.add_option('-P', '--apply-cut', action = 'append', default = [], metavar = 'arg:min,max', help = 'apply cut to injections; can specify multiple times')
+parser.add_option('-M', '--mapper', default=None, help="Specify the location of a mapper.js JavaScript in order to highlight tiles on mouse over.")
+
+opts, _ = parser.parse_args()
+
+if opts.user_tag is not None:
+    tag = '_%s' % opts.user_tag
+else:
+    tag = ''
+if not opts.cache_file:
+    raise ValueError('cache-file required')
+if not opts.output_dir:
+    raise ValueError('output-dir required')
+
+# load the layers
+print "loading layers"
+layers = efficiency.create_layers_from_config(opts.layer_config_file,
+    cube_type='single')
+
+# create the directory structure: layer0 goes in the top level folder.
+# Each sub-layer are placed in sub-folders. Every folder has an images
+# directory where plots are stored.
+imgdir = 'Images'
+scriptdir = 'scripts/'
+this_folder = '/'
+for ii,layer in enumerate(layers):
+    try:
+        os.mkdir('%s%s' %(opts.output_dir, this_folder))
+    except OSError:
+        pass
+    # make the images folder
+    try:
+        os.mkdir('%s%s%s' %(opts.output_dir, this_folder, imgdir))
+    except OSError:
+        pass
+    # make scripts foler if necessary
+    if opts.mapper is not None:
+        try:
+            os.mkdir('%s%s%s' %(opts.output_dir, this_folder, scriptdir))
+        except OSError:
+            pass
+        shutil.copy2(opts.mapper, '%s%s%s' %(
+            opts.output_dir, this_folder, scriptdir)) 
+        mapper = '%s/%s' %(scriptdir, os.path.basename(opts.mapper))
+    else:
+        mapper = None
+    layer.root_dir = opts.output_dir
+    layer.web_dir = this_folder
+    layer.images_dir = imgdir
+    # update this_folder for the next lower layer
+    this_folder = '%slayer%i/'%(this_folder, ii+1) 
+    
+
+print "getting results"
+filenames = plot_utils.parse_results_cache(opts.cache_file)
+results, id_map = plot_utils.get_injection_results(filenames, verbose=True)
+
+apply_cut = {}
+for thiscut in opts.apply_cut:
+    arg, vals = thiscut.split(':')
+    apply_cut[arg] = map(float, vals.split(','))
+if apply_cut:
+    print "applying cuts"
+    results = plot_utils.slice_results(results, apply_cut)
+
+# set the top level data and integrate
+print "binning data"
+layers[0].set_cube_data(results)
+# the top level layer is the only one for which we need to integrate parent
+layers[0].integrate_parent_efficiencies(opts.threshold, opts.ranking_stat,
+    opts.rank_by)
+layers[0].integrate_efficiencies(opts.threshold, opts.ranking_stat,
+    opts.rank_by)
+
+# now go down through the other layers, set the rest of the data, and integrate
+next_layer = layers[0].sub_layer
+while next_layer is not None:
+    next_layer.set_cube_data_using_super()
+    next_layer.integrate_efficiencies(opts.threshold, opts.ranking_stat,
+        opts.rank_by)
+    next_layer = next_layer.sub_layer
+
+# Plot
+print "plotting"
+# if min, max vol aren't specified, get the minimum/maximum volumes across
+# all of the tiles
+minvol = opts.minvol
+maxvol = opts.maxvol
+if minvol is None or maxvol is None:
+    Vs = numpy.array([child.integrated_eff for layer in layers \
+        for child in layer.all_children if child.nsamples >= opts.min_ninj])
+    if minvol is None:
+        minvol = Vs.min()
+    if maxvol is None:
+        maxvol = Vs.max()
+
+html_tmplt = '%slayer_%i-family_%i.html'
+# we'll create the plots from the bottom layers up, so that we can provide
+# links to each lower layer
+this_layer = layers[-1]
+while this_layer is not None:
+    plot_volumes.plot_volumes_from_layer(this_layer,
+        user_tag=opts.user_tag, min_ninj=opts.min_ninj,
+        tmplt_label='', inj_label='', colormap=opts.colormap,
+        maxvol=maxvol, minvol=minvol, fontsize=opts.fontsize,
+        logz=opts.logz, dpi=opts.dpi)
+
+    # if not the last layer, create the subvolumes plot
+    if this_layer.sub_layer is not None:
+        plot_volumes.plot_subvolumes_from_layer(
+            this_layer, user_tag=opts.user_tag, min_ninj=opts.min_ninj,
+            tmplt_label='', inj_label='', colormap=opts.colormap,
+            maxvol=maxvol, minvol=minvol,
+            logz=opts.logz, dpi=opts.dpi)
+
+    # write the html page
+    # the top layer page is the index page; otherwise we use the template
+    for ii,parent in enumerate(this_layer.parents):
+        if this_layer.level == 0:
+            html_name = '/index.html'
+        else:
+            html_name = html_tmplt %(this_layer.web_dir, this_layer.level, ii)
+        parent.create_html_page(this_layer.root_dir, html_name,
+            mapper=mapper)
+
+    this_layer = this_layer.super_layer

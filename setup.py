@@ -323,6 +323,7 @@ setup (
                'bin/pycbc_plot_snrchi',
                'bin/pycbc_generate_match_win',
                'bin/pycbc_plot_injrec',
+               'bin/pycbc_plot_volumes',
                'bin/hdfcoinc/pycbc_coinc_mergetrigs',
                'bin/hdfcoinc/pycbc_coinc_findtrigs',
                'bin/hdfcoinc/pycbc_coinc_bank2hdf',
