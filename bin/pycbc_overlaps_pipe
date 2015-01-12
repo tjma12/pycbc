@@ -194,6 +194,8 @@ add_opts_from_ini(cp, 'randomize_distances', randDists_job)
 common_opts = [psd_type, 'waveform-f-min', 'overlap-f-min'] 
 for opt in common_opts:
     randDists_job.add_opt(opt, cp.get('common', opt))
+if cp.has_option('common', 'ifo'):
+    randDists_job.add_opt('ifo', cp.get('common', 'ifo'))
 randDists_job.add_opt('tmp-space', opts.node_local_dir)
 
 # overlaps

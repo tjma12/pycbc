@@ -568,11 +568,13 @@ for fnum, infile in enumerate(filenames):
                 work_v1 = work_v2 = work_psd = None
 
             # get the normalization of htilde, htildeprime if they aren't known
-            if inj.sigma is None:
-                inj.sigma = filter.sigma(htildeprime, psd[:len(htildeprime)],
-                    ofmin)
-            if tmplt.sigma is None:
-                tmplt.sigma = filter.sigma(htilde, psd[:len(htilde)], ofmin)
+            if inj.sigma(ifo) is None:
+                inj.set_sigma(ifo, filter.sigma(htildeprime,
+                    psd[:len(htildeprime)],
+                    ofmin))
+            if tmplt.sigma(ifo) is None:
+                tmplt.set_sigma(ifo, filter.sigma(htilde, psd[:len(htilde)],
+                    ofmin))
 
             #
             #   Compute effectualness
@@ -581,7 +583,7 @@ for fnum, infile in enumerate(filenames):
                 overlap_utils.filter_by_resampling(
                 htilde, htildeprime, psd, ofmin, target_sample_rate,
                 max_resample_length=global_min_seg_length/4,
-                h_norm=tmplt.sigma**2, out=out_work_mem,
+                h_norm=tmplt.sigma(ifo)**2, out=out_work_mem,
                 corr_out=corr_work_mem, zero_pad_to_common_Nyquist=opts.vary_n,
                 work_v1=work_v1, work_v2=work_v2, work_psd=work_psd)
 
@@ -589,7 +591,7 @@ for fnum, infile in enumerate(filenames):
             # length of htildeprime and htilde, we do not need to worry
             # about corruption
 
-            effectualness = abs(cmplx_ts[maxidx]*norm)/inj.sigma
+            effectualness = abs(cmplx_ts[maxidx]*norm)/inj.sigma(ifo)
 
             time_offset = segment_start + maxidx*cmplx_ts.delta_t + offset - \
                 inj.geocent_time
@@ -601,7 +603,7 @@ for fnum, infile in enumerate(filenames):
                         overlap_utils.weight_functions[weight_func](
                             tmplt, ofmin, psd_model=opts.psd_model,
                             asd_file=opts.asd_file, workspace=workSpace,
-                            use_tmplt_sigma=True)
+                            use_tmplt_sigma=True, ifo=ifo)
                     tmplt.weights[weight_func] = weight 
                     overlap_utils.add_tmplt_weight(connection,
                         tmplt.tmplt_id, weight_func, weight)

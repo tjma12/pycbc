@@ -427,7 +427,8 @@ def noAntiAligned(tmplt, *args, **kwargs):
         return 1.
 
 def weight_by_volume(tmplt, tmplt_prime, use_tmplt_sigma=False,
-        use_tmplt_prime_sigma=False, fmin=None, psd_model=None, asd_file=None,
+        use_tmplt_prime_sigma=False, ifo=None, fmin=None, psd_model=None,
+        asd_file=None,
         workspace=None):
     """
     Generates the weight: 
@@ -456,6 +457,9 @@ def weight_by_volume(tmplt, tmplt_prime, use_tmplt_sigma=False,
     use_tmplt_prime_sigma: bool
         If set to True, the sigma property of tmplt_prime will be used for
         sigma'. Otherwise, sigma' is calculated. Default is False.
+    ifo: {None, str}
+        The ifo to use for the sigmas. Must be set if "use_tmplt_sigma" or
+        "use_tmplt_prime_sigma" is set to True.
     fmin: float
         The starting frequency to use for the overlaps. Needed if
         either use_tmplt_sigma or use_tmplt_prime_sigma is False.
@@ -487,10 +491,10 @@ def weight_by_volume(tmplt, tmplt_prime, use_tmplt_sigma=False,
 
     # get sigma
     if use_tmplt_sigma: 
-        if tmplt.sigma is None:
+        if tmplt.sigma(ifo) is None:
             raise ValueError("tmplt's sigma property must be populated when "+
                 "use_tmplt_sigma is True")
-        sigma = tmplt.sigma
+        sigma = tmplt.sigma(ifo)
     else:
         htilde = tmplt.get_fd_waveform(tmplt.min_sample_rate,
             tmplt.min_seg_length, store=False) 
@@ -508,7 +512,7 @@ def weight_by_volume(tmplt, tmplt_prime, use_tmplt_sigma=False,
         if tmplt_prime.sigma is None:
             raise ValueError("tmplt_prime's sigma property must be populated "+
                 "when use_tmplt_prime_sigma is True")
-        sigma_prime = tmplt_prime.sigma
+        sigma_prime = tmplt_prime.sigma(ifo)
     else:
         htilde_prime = tmplt_prime.get_fd_waveform(tmplt_prime.min_sample_rate,
             tmplt_prime.min_seg_length, store=False)
@@ -526,7 +530,7 @@ def weight_by_volume(tmplt, tmplt_prime, use_tmplt_sigma=False,
 
 
 def equalMassVol(tmplt, fmin, psd_model=None, asd_file=None, workspace=None,
-        use_tmplt_sigma=False):
+        use_tmplt_sigma=False, ifo=None):
     """
     Calls weight_by_volume with tmplt set to the given tmplt and tmplt_prime
     set to a template with the same total mass as tmplt, but with the
@@ -551,6 +555,9 @@ def equalMassVol(tmplt, fmin, psd_model=None, asd_file=None, workspace=None,
     use_tmplt_sigma: bool
         If set to True, the sigma property of tmplt will be used for sigma.
         Otherwise, sigma is calculated. Default is False.
+    ifo: {None, str}
+        The ifo to use for the sigmas. Must be set if "use_tmplt_sigma" is set
+        to True.
 
     Returns
     -------
@@ -564,12 +571,12 @@ def equalMassVol(tmplt, fmin, psd_model=None, asd_file=None, workspace=None,
 
     return weight_by_volume(tmplt, tmplt_prime,
         use_tmplt_sigma=use_tmplt_sigma, use_tmplt_prime_sigma=False,
-        fmin=fmin, psd_model=psd_model, asd_file=asd_file,
+        ifo=ifo, fmin=fmin, psd_model=psd_model, asd_file=asd_file,
         workspace=workspace)
 
 
 def nonSpinVol(tmplt, fmin, psd_model=None, asd_file=None, workspace=None,
-        use_tmplt_sigma=False):
+        use_tmplt_sigma=False, ifo=None):
     """
     Calls weight_by_volume with tmplt set to the given tmplt and tmplt_prime
     set to a template with the same component masses as the given
@@ -594,6 +601,9 @@ def nonSpinVol(tmplt, fmin, psd_model=None, asd_file=None, workspace=None,
     use_tmplt_sigma: bool
         If set to True, the sigma property of tmplt will be used for sigma.
         Otherwise, sigma is calculated. Default is False.
+    ifo: {None, str}
+        The ifo to use for the sigmas. Must be set if "use_tmplt_sigma" is set
+        to True.
 
     Returns
     -------
@@ -610,12 +620,12 @@ def nonSpinVol(tmplt, fmin, psd_model=None, asd_file=None, workspace=None,
 
     return weight_by_volume(tmplt, tmplt_prime,
         use_tmplt_sigma=use_tmplt_sigma, use_tmplt_prime_sigma=False,
-        fmin=fmin, psd_model=psd_model, asd_file=asd_file,
+        ifo=ifo, fmin=fmin, psd_model=psd_model, asd_file=asd_file,
         workspace=workspace)
 
 
 def equalMassNonSpinVol(tmplt, fmin, psd_model=None, asd_file=None,
-        workspace=None, use_tmplt_sigma=False):
+        workspace=None, use_tmplt_sigma=False, ifo=None):
     """
     Calls weight_by_volume with tmplt set to the given tmplt and tmplt_prime
     set to a template with the same total mass as the given template, but
@@ -640,6 +650,9 @@ def equalMassNonSpinVol(tmplt, fmin, psd_model=None, asd_file=None,
     use_tmplt_sigma: bool
         If set to True, the sigma property of tmplt will be used for sigma.
         Otherwise, sigma is calculated. Default is False.
+    ifo: {None, str}
+        The ifo to use for the sigmas. Must be set if "use_tmplt_sigma" is set
+        to True.
 
     Returns
     -------
@@ -657,7 +670,7 @@ def equalMassNonSpinVol(tmplt, fmin, psd_model=None, asd_file=None,
 
     return weight_by_volume(tmplt, tmplt_prime,
         use_tmplt_sigma=use_tmplt_sigma, use_tmplt_prime_sigma=False,
-        fmin=fmin, psd_model=psd_model, asd_file=asd_file,
+        ifo=ifo, fmin=fmin, psd_model=psd_model, asd_file=asd_file,
         workspace=workspace)
 
 

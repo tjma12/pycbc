@@ -615,7 +615,10 @@ class Waveform(object):
         self._sigmas[ifo] = sigma
 
     def sigma(self, ifo):
-        return self._sigmas[ifo]
+        try:
+            return self._sigmas[ifo]
+        except KeyError:
+            return None
 
     def clear_sigmas(self):
         self._sigmas.clear()
