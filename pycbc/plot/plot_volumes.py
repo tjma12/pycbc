@@ -65,18 +65,18 @@ def plot_volumes(phyper_cubes, xarg, xlabel, yarg, ylabel, min_ninj=2,
         annotate=True, fontsize=8, 
         logx=False, logy=False, logz=False,
         xmin=None, xmax=None, ymin=None, ymax=None, fig=None,
-        ax=None, dpi=300):
+        ax=None, add_clickables=True, dpi=300):
 
     if fig is None:
-        fig = pyplot.figure(dpi=dpi)
+        mfig = plot_utils.figure(dpi=dpi)
+    else:
+        mfig = fig
     if ax is None:
-        ax = fig.add_subplot(111, axisbg='k')
+        ax = mfig.add_subplot(111, axisbg='k')
     else:
         # check that the given axes is in fig
-        if ax not in fig.axes:
+        if ax not in mfig.axes:
             raise ValueError("given ax is not in the figure")
-
-    mfig = plot_utils.MappableFigure(fig)
 
     # only use cubes that have enough injections
     phyper_cubes = [this_cube for this_cube in phyper_cubes if \
@@ -171,11 +171,12 @@ def plot_volumes(phyper_cubes, xarg, xlabel, yarg, ylabel, min_ninj=2,
         # plot
         tile = ax.fill(x, y, color=clr, zorder=1)[0]
         # the tiles will be clickable
-        # we'll make the tag be the x, y values of tile
-        tag = 'x: [%f, %f)\ny: [%f, %f)' %(xlow, xhigh, ylow, yhigh)
-        clickable = plot_utils.ClickableElement(tile, 'poly', data=this_cube,
-            tag=tag, link=this_cube.html_page)
-        mfig.add_clickable(clickable) 
+        if add_clickables:
+            # we'll make the tag be the x, y values of tile
+            tag = 'x: [%f, %f)\ny: [%f, %f)' %(xlow, xhigh, ylow, yhigh)
+            clickable = plot_utils.ClickableElement(tile, 'poly',
+                data=this_cube, tag=tag, link=this_cube.html_page)
+            mfig.add_clickable(clickable) 
         if annotate:
             pts = ax.annotate(txt_str, (txtx, txty), ha='center',
                 va='center', color=txt_clr, zorder=3, fontsize=fontsize)
@@ -278,14 +279,13 @@ def plot_volumes_from_layer(layer, user_tag='', min_ninj=1,
             minvol=minvol, fontsize=fontsize,
             logx=layer.x_distr == 'log10', logy=layer.y_distr == 'log10',
             logz=logz, xmin=layer.plot_x_min, xmax=layer.plot_x_max,
-            ymin=layer.plot_y_min, ymax=layer.plot_y_max, dpi=dpi)
+            ymin=layer.plot_y_min, ymax=layer.plot_y_max)
         # save the figure
         plotname = fnametmplt %(layer.images_dir, user_tag, layer.level, ii) 
         print "saving %i-%i..." %(layer.level, ii),
         mfig.savefig('%s%s/%s' %(layer.root_dir, layer.web_dir, plotname),
-            dpi=dpi)#, bbox_inches='tight')
+            dpi=dpi)
         print "done"
-        # note: we do not store the source dir
         parent.tiles_plot = mfig
 
 
@@ -305,8 +305,8 @@ def plot_subvolumes(phyper_cubes, xarg, xlabel, yarg, ylabel,
 
     # if nothing to plot, just create an empty plot and return
     if phyper_cubes == []:
-        mfig = plot_utils.MappableFigure(pyplot.figure(dpi=dpi))
-        ax = mfig.figure.add_subplot(111)
+        mfig = plot_utils.figure(dpi=dpi)
+        ax = mfig.add_subplot(111)
         empty_plot(ax)
         return mfig
 
@@ -317,16 +317,16 @@ def plot_subvolumes(phyper_cubes, xarg, xlabel, yarg, ylabel,
     minvol = Vs.min()
     maxvol = Vs.max()
 
-    # create the master plot
+    # create the master plot with clickable elements
     mfig = plot_volumes(
         phyper_cubes, xarg, xlabel, yarg, ylabel, min_ninj,
         tmplt_label=tmplt_label, inj_label=inj_label,
         add_title=True, colormap=colormap, maxvol=maxvol, minvol=minvol,
         add_colorbar=True, annotate=False, logx=logx, logy=logy, logz=logz,
-        xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax, dpi=dpi)
+        xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax, dpi=dpi,
+        add_clickables=True)
       
-    fig = mfig.figure
-    master_ax = fig.axes[0]
+    master_ax = mfig.axes[0]
 
     # we need to ensure that the master x and y-limits don't change, to ensure
     # that the axes we will put on top of the master plot are in the right
@@ -348,7 +348,7 @@ def plot_subvolumes(phyper_cubes, xarg, xlabel, yarg, ylabel,
         numpy.where(tile_yvals == tile_yvals.min())[0])[0]
     # the transformation to go from display coordinates to figure coordinates;
     # we'll need this to properly place the inset axes
-    invtrans = fig.transFigure.inverted()
+    invtrans = mfig.transFigure.inverted()
     # we also need to adjust the x and y limits of the master plot 
     # to make room for the inset axes labels
     masterax_lbcoords_fig = numpy.array([master_ax.get_position().xmin,
@@ -371,7 +371,7 @@ def plot_subvolumes(phyper_cubes, xarg, xlabel, yarg, ylabel,
     if transx != 0 or transy != 0:
         new_tile_coords = tile_lbcoords_fig + numpy.array([transx, transy])
         # convert to data coordinates: first, transform from fig to display
-        new_tile_coords = fig.transFigure.transform(new_tile_coords)
+        new_tile_coords = mfig.transFigure.transform(new_tile_coords)
         # now from display to data coords
         new_tile_coords = master_ax.transData.inverted().transform(
             new_tile_coords)
@@ -399,14 +399,15 @@ def plot_subvolumes(phyper_cubes, xarg, xlabel, yarg, ylabel,
         tile_figy = tile_fig_coords[:,1]
         inset_coords = [tile_figx.min(), tile_figy.min(),
             tile_figx.max()-tile_figx.min(), tile_figy.max()-tile_figy.min()]
-        inset_axes = fig.add_axes(inset_coords)
+        inset_axes = mfig.add_axes(inset_coords)
         # now create the sub plot in the inset_axes
-        # we don't need the mfig created by plot_volumes 
+        # note that we turn off the clickables in the inset_axes
         plot_volumes(
             parent.children, sub_xarg, sub_xlabel, sub_yarg, sub_ylabel,
             min_ninj=min_ninj, add_title=False, colormap=colormap,
             maxvol=maxvol, minvol=minvol, add_colorbar=False, annotate=False,
-            logx=sub_logx, logy=sub_logy, logz=logz, fig=fig, ax=inset_axes)
+            logx=sub_logx, logy=sub_logy, logz=logz, fig=mfig, ax=inset_axes,
+            add_clickables=False)
         # make the inset axis limits cover exactly the space of the tiles
         sub_xmin = min([child.get_bound(sub_xarg)[0] \
             for child in parent.children])
@@ -477,12 +478,12 @@ def plot_subvolumes_from_layer(layer, user_tag='', min_ninj=1,
             sub_logx=layer.sub_layer.x_distr == 'log10',
             sub_logy=layer.sub_layer.y_distr == 'log10',
             logz=logz, xmin=layer.plot_x_min, xmax=layer.plot_x_max,
-            ymin=layer.plot_y_min, ymax=layer.plot_y_max, dpi=dpi)
+            ymin=layer.plot_y_min, ymax=layer.plot_y_max)
 
         # save the figure
         plotname = fnametmplt %(layer.images_dir, user_tag, layer.level, ii) 
         print "saving %i-%i..." %(layer.level, ii),
         mfig.savefig('%s%s/%s' %(layer.root_dir, layer.web_dir, plotname),
-            dpi=dpi)#, bbox_inches='tight')
+            dpi=dpi)
         print "done"
         parent.subtiles_plot = mfig

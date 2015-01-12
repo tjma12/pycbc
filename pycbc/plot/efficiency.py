@@ -159,7 +159,8 @@ class PHyperCube:
         self.integrated_err_low = self.integrated_err_high = \
             integrand.std()
 
-    def create_html_page(self, out_dir, html_name, mapper=None):
+    def create_html_page(self, out_dir, html_name, mapper=None,
+            mainplots_widths=1000):
         """
         Create's self html page. See _create_html_page for details.
         """
@@ -323,7 +324,7 @@ def _construct_links(plotted_cubes, tiles):
     return links, tags
 
 
-def _create_html_page(phyper_cube, out_dir, html_name, mainplot_widths=750,
+def _create_html_page(phyper_cube, out_dir, html_name, mainplots_widths=1000,
         mapper=None):
     """
     Creates an html page for the given PHyperCube.
@@ -383,10 +384,12 @@ def _create_html_page(phyper_cube, out_dir, html_name, mainplot_widths=750,
             figname = os.path.relpath(os.path.abspath(mfig.saved_filename),
                 os.path.dirname(os.path.abspath(html_page)))
             print >> f, '<img src="%s" width="%i" />' %(figname,
-                mainplot_widths)
+                mainplots_widths)
         else:
+            print >> f, "Click on a tile to go to the next layer for that " +\
+                "tile. <br />"
             print >> f, mfig.create_image_map(html_page,
-                view_width=mainplot_widths)
+                view_width=mainplots_widths)
     # put the subtiles plot
     if phyper_cube.subtiles_plot is not None:
         print >> f, "<hr />"
@@ -399,10 +402,12 @@ def _create_html_page(phyper_cube, out_dir, html_name, mainplot_widths=750,
             figname = os.path.relpath(os.path.abspath(mfig.saved_filename),
                 os.path.dirname(os.path.abspath(html_page)))
             print >> f, '<img src="%s" width="%i" />' %(figname,
-                mainplot_widths)
+                mainplots_widths)
         else:
+            print >> f, "Click on a tile to go to the next layer for that " +\
+                "tile. <br />"
             print >> f, mfig.create_image_map(html_page,
-                view_width=mainplot_widths)
+                view_width=mainplots_widths)
     # close out
     print >> f, '</body>\n</html>'
     f.close()
