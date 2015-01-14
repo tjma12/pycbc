@@ -1,5 +1,7 @@
 #! /usr/bin/env python
 
+import sys
+
 columnwidth = 3.4
 width = 2*columnwidth
 height = 3.5
@@ -59,8 +61,149 @@ def empty_plot(ax):
     return ax.annotate("Nothing to plot", (0.5, 0.5))
 
 
-def plot_volumes(phyper_cubes, xarg, xlabel, yarg, ylabel, min_ninj=2,
-        tmplt_label = '', inj_label='', add_title=True,
+def plot_volume_vs_stat_on_axes(ax, phyper_cube, min_stat, max_stat,
+        logx=False, logy=False, nbins=20, threshold=None, color='b',
+        xmin=None, xmax=None, ymin=None, ymax=None):
+    """
+    Creats a plot of sensitive volume versus ranking stat on the given axes.
+    """
+    if phyper_cube.nsamples < 2:
+        return empty_plot(ax), None, None
+    if logx:
+        thresholds = numpy.logspace(numpy.log10(min_stat),
+            numpy.log10(max_stat), nbins)
+    else:
+        thresholds = numpy.linspace(min_stat, max_stat, nbins)
+    volumes = numpy.array([phyper_cube.get_volume(xhat) for xhat in \
+        thresholds])
+    # volumes is a 2D array, with the first column being the volumes, the
+    # second the error
+    Vs = volumes[:,0]
+    errs = volumes[:,1]
+    vline = ax.plot(thresholds, Vs, color=color, lw=2, zorder=2)
+    # we'll plot the error region a filled space; fill works counter-clockwise
+    # around the polygon formed by the error region
+    xvals = numpy.zeros(2*Vs.shape[0])
+    xvals[:Vs.shape[0]] = thresholds
+    xvals[Vs.shape[0]:] = thresholds[::-1]
+    yvals = numpy.zeros(2*Vs.shape[0])
+    yvals[:Vs.shape[0]] = Vs - errs
+    yvals[Vs.shape[0]:] = (Vs + errs)[::-1]
+    # if logy, replace any negative or 0 values with the smallest non-zero
+    if logy and yvals.min() <= 0:
+        replace_idx = numpy.where(yvals[:Vs.shape[0]] <= 0.)
+        if ymin is None:
+            ok_vals = yvals[numpy.where(yvals[:Vs.shape[0]] > 0.)]
+            if len(ok_vals) == 0:
+                replace_val = Vs.min()*0.01
+            else:
+                replace_val = ok_vals.min() * 0.1
+            ymin = replace_val.min()
+        else:
+            replace_val = ymin
+        yvals[replace_idx] = replace_val
+    err_region = ax.fill(xvals, yvals, facecolor=color, lw=0,
+        alpha=0.4, zorder=1)
+    if logx and logy:
+        ax.loglog()
+    elif logx:
+        ax.semilogx()
+    elif logy:
+        ax.semilogy()
+    plot_xmin, plot_xmax = ax.get_xlim()
+    plot_ymin, plot_ymax = ax.get_ylim()
+    if xmin is not None:
+        plot_xmin = xmin
+    if xmax is not None:
+        plot_xmax = xmax
+    if ymin is not None:
+        plot_ymin = ymin
+    if ymax is not None:
+        plot_ymax = ymax
+    # if a threshold is given, plot a line showing where it is
+    if threshold is not None:
+        tline = ax.plot([threshold, threshold], [plot_ymin, plot_ymax],
+            'k--', lw=2, zorder=3)
+    else:
+        tline = None
+    ax.set_xlim(plot_xmin, plot_xmax)
+    ax.set_ylim(plot_ymin, plot_ymax)
+
+    return vline, err_region, tline
+
+
+def plot_volume_vs_stat(phyper_cube, min_stat, max_stat, stat_label,
+        logx=False, logy=False, nbins=20, threshold=None, color='b',
+        xmin=None, xmax=None, ymin=None, ymax=None):
+    """
+    Creates a plot of sensitive volume vs stat.
+    """
+    # we'll use a mappable figure even though this has no clickable elements
+    fig = plot_utils.figure()
+    fig.subplots_adjust(bottom=0.15)
+    ax = fig.add_subplot(111)
+
+    # add the plot to axes
+    plot_volume_vs_stat_on_axes(ax, phyper_cube, min_stat, max_stat,
+        logx=logx, logy=logy, nbins=nbins, threshold=threshold,
+        color=color, xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax)
+    # label
+    ax.set_xlabel(stat_label)
+    ax.set_ylabel('$V\,(\mathrm{Mpc}^3)$')
+
+    return fig
+
+
+def plot_volume_vs_stat_from_layer(layer, min_stat, max_stat, stat_label,
+        include_children=False, user_tag='', min_ninj=2,
+        logx=False, logy=False, nbins=20, threshold=None, color='b',
+        xmin=None, xmax=None, ymin=None, ymax=None, dpi=300, verbose=False):
+    """
+    Wrapper around plot_volume_vs_stat that creates a volume_vs_stat plot for
+    every parent in the given layer. The resulting figures are saved to disk,
+    with the MappableFigure instances saved to each parent's
+    volume_vs_stat_plot attribute.
+    """
+    # check that we have the necessary directory information
+    if not layer.root_dir:
+        raise ValueError('no root_dir set for this layer!')
+    if not layer.web_dir:
+        raise ValueError('no web_dir set for this layer!')
+    if not layer.images_dir:
+        raise ValueError('no images_dir set for this layer!')
+    # Plot file template is:
+    # layer.imagesdir/plot_volume_vs_stat{-user_tag}-{layer_level}-\
+    # {file_index}.png
+    fnametmplt = '%s/plot_volume_vs_stat%s-%i-%i.png'
+    if user_tag != '':
+        user_tag = '-%s' % user_tag
+    plot_cubes = [parent for parent in layer.parents \
+        if parent.nsamples >= min_ninj]
+    # if include_children, we'll also create plots for the children
+    if include_children:
+        plot_cubes += [child for parent in plot_cubes \
+            for child in parent.children]
+    if verbose:
+        print >> sys.stdout, "creating volume vs. stat plots for level %i:" %(
+            layer.level)
+    for ii,cube in enumerate(plot_cubes):
+        if verbose:
+            print >> sys.stdout, "%i / %i\r" %(ii+1, len(plot_cubes)),
+            sys.stdout.flush()
+        fig = plot_volume_vs_stat(cube, min_stat, max_stat, stat_label,
+            logx=logx, logy=logy, nbins=nbins, threshold=threshold,
+            color=color, xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax)
+        # save the figure
+        plotname = fnametmplt %(layer.images_dir, user_tag, layer.level, ii) 
+        fig.savefig('%s%s/%s' %(layer.root_dir, layer.web_dir, plotname),
+            dpi=dpi)
+        cube.volumes_vs_stat_plot = fig
+    if verbose:
+        print >> sys.stdout, ""
+
+
+def plot_volumes(phyper_cubes, xarg, xlabel, yarg, ylabel, threshold,
+        min_ninj=2, tmplt_label = '', inj_label='', add_title=True,
         colormap='hot', maxvol=None, minvol=None, add_colorbar=False,
         annotate=True, fontsize=8, 
         logx=False, logy=False, logz=False,
@@ -87,12 +230,16 @@ def plot_volumes(phyper_cubes, xarg, xlabel, yarg, ylabel, min_ninj=2,
         empty_plot(ax)
         return mfig
 
-
-    Vs = numpy.array([this_cube.integrated_eff for this_cube in \
+    # volumes is a 2D array, with the first column being the volumes, the
+    # second the error
+    volumes = numpy.array([this_cube.get_volume(threshold) for this_cube in \
         phyper_cubes])
+    Vs = volumes[:,0]
+    errs = volumes[:,1]
     # we'll divide by the closest power of 10 of the smallest value
     conversion_factor = numpy.floor(numpy.log10(Vs.min()))
-    Vs *= 10**(-conversion_factor)
+    # note that the following adjusts both Vs and errs at once
+    volumes *= 10**(-conversion_factor)
     if minvol is not None:
         minvol *= 10**(-conversion_factor)
     if maxvol is not None:
@@ -122,7 +269,7 @@ def plot_volumes(phyper_cubes, xarg, xlabel, yarg, ylabel, min_ninj=2,
         maxvol = numpy.log10(maxvol)
 
     # now cycle over the cubes and create each plot tile
-    for V,this_cube in zip(Vs, phyper_cubes):
+    for V,err,this_cube in zip(Vs, errs, phyper_cubes):
 
         # get the x, y corners of the tile from the bounds
         xlow, xhigh = this_cube.get_bound(xarg)
@@ -149,10 +296,6 @@ def plot_volumes(phyper_cubes, xarg, xlabel, yarg, ylabel, min_ninj=2,
             else:
                 txt_clr = 'k'
             # get the text to print
-            err = max(this_cube.integrated_err_low,
-                this_cube.integrated_err_high) * 10**(-conversion_factor)
-            if units == 'Gpc':
-                err *= 1e-9
             if logz:
                 voltxt = plot_utils.get_signum(10**V, err)
             else:
@@ -227,8 +370,16 @@ def plot_volumes(phyper_cubes, xarg, xlabel, yarg, ylabel, min_ninj=2,
     ax.set_xlim(plot_xmin, plot_xmax)
     ax.set_ylim(plot_ymin, plot_ymax)
 
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(ylabel)
+    if xlabel is not None:
+        # make room from x-label
+        orig_pos = ax.get_position()
+        new_y0 = 0.15
+        add_amount = new_y0 - orig_pos.y0
+        new_height = orig_pos.height - add_amount
+        ax.set_position([orig_pos.x0, new_y0, orig_pos.width, new_height])
+        ax.set_xlabel(xlabel)
+    if ylabel is not None:
+        ax.set_ylabel(ylabel)
 
     # set axis color schemes for black background
     ax.tick_params(axis='x', color='w')
@@ -247,10 +398,10 @@ def plot_volumes(phyper_cubes, xarg, xlabel, yarg, ylabel, min_ninj=2,
     return mfig
 
 
-def plot_volumes_from_layer(layer, user_tag='', min_ninj=1,
+def plot_volumes_from_layer(layer, threshold, user_tag='', min_ninj=1,
         tmplt_label='', inj_label='',
         colormap='hot', maxvol=None, minvol=None, fontsize=8, 
-        logz=False, dpi=300):
+        logz=False, dpi=300, verbose=False):
     """
     Wrapper around plot_volumes that creates a volume plot for every
     parent in the given layer. X and Y arguments/labels of the volume
@@ -270,10 +421,16 @@ def plot_volumes_from_layer(layer, user_tag='', min_ninj=1,
     fnametmplt = '%s/plot_volumes%s-%i-%i.png'
     if user_tag != '':
         user_tag = '-%s' % user_tag
+    if verbose:
+        print >> sys.stdout, "creating volume tiles plots for level %i:" %(
+            layer.level)
     for ii,parent in enumerate(layer.parents):
+        if verbose:
+            print >> sys.stdout, "%i / %i\r" %(ii+1, len(layer.parents)),
+            sys.stdout.flush()
         mfig = plot_volumes(
             parent.children, layer.x_param, layer.x_param.label,
-            layer.y_param, layer.y_param.label, min_ninj=min_ninj,
+            layer.y_param, layer.y_param.label, threshold, min_ninj=min_ninj,
             tmplt_label=tmplt_label, inj_label=inj_label, annotate=True,
             add_colorbar=False, colormap=colormap, maxvol=maxvol,
             minvol=minvol, fontsize=fontsize,
@@ -282,15 +439,15 @@ def plot_volumes_from_layer(layer, user_tag='', min_ninj=1,
             ymin=layer.plot_y_min, ymax=layer.plot_y_max)
         # save the figure
         plotname = fnametmplt %(layer.images_dir, user_tag, layer.level, ii) 
-        print "saving %i-%i..." %(layer.level, ii),
         mfig.savefig('%s%s/%s' %(layer.root_dir, layer.web_dir, plotname),
             dpi=dpi)
-        print "done"
         parent.tiles_plot = mfig
+    if verbose:
+        print >> sys.stdout, ""
 
 
 def plot_subvolumes(phyper_cubes, xarg, xlabel, yarg, ylabel,
-        sub_xarg, sub_xlabel, sub_yarg, sub_ylabel, min_ninj=2,
+        sub_xarg, sub_xlabel, sub_yarg, sub_ylabel, threshold, min_ninj=2,
         tmplt_label='', inj_label='',
         colormap='hot', maxvol=None, minvol=None,
         logx=False, logy=False, sub_logx=False, sub_logy=False, logz=False,
@@ -312,14 +469,14 @@ def plot_subvolumes(phyper_cubes, xarg, xlabel, yarg, ylabel,
 
     # to ensure we get properly normalized colors, find the largest
     # and smallest Vs across all of the children of all of the phyper_cubes
-    Vs = numpy.array([child.integrated_eff for parent in phyper_cubes \
-        for child in parent.children if child.nsamples >= min_ninj])
+    Vs = numpy.array([child.get_volume(threshold) for parent in phyper_cubes \
+        for child in parent.children if child.nsamples >= min_ninj])[:,0]
     minvol = Vs.min()
     maxvol = Vs.max()
 
     # create the master plot with clickable elements
     mfig = plot_volumes(
-        phyper_cubes, xarg, xlabel, yarg, ylabel, min_ninj,
+        phyper_cubes, xarg, xlabel, yarg, ylabel, threshold, min_ninj,
         tmplt_label=tmplt_label, inj_label=inj_label,
         add_title=True, colormap=colormap, maxvol=maxvol, minvol=minvol,
         add_colorbar=True, annotate=False, logx=logx, logy=logy, logz=logz,
@@ -401,9 +558,10 @@ def plot_subvolumes(phyper_cubes, xarg, xlabel, yarg, ylabel,
             tile_figx.max()-tile_figx.min(), tile_figy.max()-tile_figy.min()]
         inset_axes = mfig.add_axes(inset_coords)
         # now create the sub plot in the inset_axes
-        # note that we turn off the clickables in the inset_axes
+        # note that we turn off the clickables in the inset_axes; also, we'll
+        # add the axis labels later
         plot_volumes(
-            parent.children, sub_xarg, sub_xlabel, sub_yarg, sub_ylabel,
+            parent.children, sub_xarg, None, sub_yarg, None, threshold,
             min_ninj=min_ninj, add_title=False, colormap=colormap,
             maxvol=maxvol, minvol=minvol, add_colorbar=False, annotate=False,
             logx=sub_logx, logy=sub_logy, logz=logz, fig=mfig, ax=inset_axes,
@@ -426,10 +584,10 @@ def plot_subvolumes(phyper_cubes, xarg, xlabel, yarg, ylabel,
                     map(str, getattr(inset_axes, 'get_%sticks'%(xy))()))
                 getattr(inset_axes,
                     'set_%sticklabels'%(xy))(ticklabels, color='w', fontsize=6)
-            # make the axis labels smaller
-            inset_axes.set_xlabel(inset_axes.get_xlabel(), color='w',
+            # add the labels
+            inset_axes.set_xlabel(sub_xlabel, color='w',
                 fontsize=8, labelpad=2)
-            inset_axes.set_ylabel(inset_axes.get_ylabel(), color='w',
+            inset_axes.set_ylabel(sub_ylabel, color='w',
                 fontsize=8, labelpad=2)
         else:
             # remove tick and axis labels otherwise
@@ -441,9 +599,10 @@ def plot_subvolumes(phyper_cubes, xarg, xlabel, yarg, ylabel,
     return mfig
 
 
-def plot_subvolumes_from_layer(layer, user_tag='', min_ninj=1,
+def plot_subvolumes_from_layer(layer, threshold, user_tag='', min_ninj=1,
         tmplt_label='', inj_label='',
-        colormap='hot', maxvol=None, minvol=None, logz=False, dpi=300):
+        colormap='hot', maxvol=None, minvol=None, logz=False, dpi=300,
+        verbose=False):
     """
     Wrapper around plot_subvolumes that creates a subvolume plot for every
     parent in the given layer. X and Y arguments/labels of the volume
@@ -466,12 +625,18 @@ def plot_subvolumes_from_layer(layer, user_tag='', min_ninj=1,
     fnametmplt = '%s/plot_subvolumes%s-%i-%i.png'
     if user_tag != '':
         user_tag = '-%s' % user_tag
+    if verbose:
+        print >> sys.stdout, "creating volume subtiles plots for level %i:" %(
+            layer.level)
     for ii,parent in enumerate(layer.parents):
+        if verbose:
+            print >> sys.stdout, "%i / %i\r" %(ii+1, len(layer.parents)),
+            sys.stdout.flush()
         mfig = plot_subvolumes(
             parent.children, layer.x_param, layer.x_param.label,
             layer.y_param, layer.y_param.label,
             layer.sub_layer.x_param, layer.sub_layer.x_param.label,
-            layer.sub_layer.y_param, layer.sub_layer.y_param.label,
+            layer.sub_layer.y_param, layer.sub_layer.y_param.label, threshold,
             min_ninj=min_ninj, tmplt_label=tmplt_label, inj_label=inj_label,
             colormap=colormap, maxvol=maxvol, minvol=minvol,
             logx=layer.x_distr == 'log10', logy=layer.y_distr == 'log10',
@@ -482,8 +647,9 @@ def plot_subvolumes_from_layer(layer, user_tag='', min_ninj=1,
 
         # save the figure
         plotname = fnametmplt %(layer.images_dir, user_tag, layer.level, ii) 
-        print "saving %i-%i..." %(layer.level, ii),
         mfig.savefig('%s%s/%s' %(layer.root_dir, layer.web_dir, plotname),
             dpi=dpi)
-        print "done"
         parent.subtiles_plot = mfig
+
+    if verbose:
+        print >> sys.stdout, ""

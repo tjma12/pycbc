@@ -50,15 +50,15 @@ class PHyperCube:
         if bounds is not None:
             self.set_bounds(**bounds)
         self.data = None
-        self.threshold = None
+        self._ranking_stat = None
+        self._rank_by = None
         self.nsamples = None
-        self.integrated_eff = None
-        self.integrated_err_low = None
-        self.integrated_err_high = None
+        self._cached_volumes = {}
         # for grouping together phyper cubes
         self.parent = None
         self.children = []
         # for storing plots and pages
+        self.volumes_vs_stat_plot = None
         self.tiles_plot = None
         self.subtiles_plot = None
         self.additional_plots = []
@@ -136,8 +136,73 @@ class PHyperCube:
         self.data = plot_utils.slice_results(data, self.bounds)
         self.nsamples = len(self.data)
 
-    def integrate_efficiency(self, threshold, ranking_stat='new_snr',
-            rank_by='max'):
+    def set_ranking_params(self, ranking_stat, rank_by):
+        """
+        Set self's ranking_stat and rank_by. These are needed to compute
+        sensitive volumes.
+
+        Parameters
+        ----------
+        ranking_stat: str
+            The stat to use when determining whether or injections are found
+            or missed. Must be an attribute, or a math operation on a
+            combination of attributes, of the elements in self.data
+        rank_by: str {'max'|'min'}
+            How the ranking stat scales with signficance. If 'max' ('min'),
+            larger (smaller) values of the ranking stat will be considered
+            more significant.
+        """
+        self._ranking_stat = ranking_stat
+        if not (rank_by == 'max' or rank_by == 'min'):
+            raise ValueError("unrecognized rank_by argument %s; " %(rank_by) +\
+                "options are 'max' or 'min'")
+        self._rank_by = rank_by
+
+    @property
+    def ranking_stat(self):
+        return self._ranking_stat
+
+    @property
+    def rank_by(self):
+        return self._rank_by
+        
+    def get_volume(self, threshold):
+        """
+        Retrieves the sensitive volume using the given threshold of self's
+        ranking_stat. This is done by integrating the efficiency in self
+        using self._integrate_efficiency. Volumes are cached to
+        self._cached_volumes for faster retrieval later on. Self's
+        _ranking_stat and _rank_by parameters must be set (see
+        set_ranking_params).
+
+        Parameters
+        ----------
+        threshold: float
+            Value to use for considering what is a found injection and what is
+            missed.
+
+        Returns
+        -------
+        volume: float
+            The sensitive volume.
+        err: float
+            The error on the sensitive volume measurement, found from the
+            standard deviation of Monte Carlo integral.
+        """
+        try:
+            return self._cached_volumes[threshold, self._ranking_stat, 
+                self._rank_by]
+        except KeyError:
+            if self._ranking_stat is None:
+                raise ValueError("must set ranking_stat and rank_by first; " +
+                    "see set_ranking_params()")
+            volume, err = self._integrate_efficiency(threshold,
+                self._ranking_stat, self._rank_by)
+            self._cached_volumes[threshold,self._ranking_stat,self._rank_by] =\
+                (volume, err)
+            return volume, err
+
+    def _integrate_efficiency(self, threshold, ranking_stat, rank_by):
         """
         Integrates the efficiency in self's bounds to get a measure of the
         sensitive volumes.
@@ -152,12 +217,16 @@ class PHyperCube:
         if self.nsamples <= 1:
             raise ValueError("there must be more than one sample to " +
                 "compute efficiency")
-        integrand = numpy.array([x.inj_min_vol + x.inj_weight * \
+        integrand = numpy.array([x.inj_weight * \
             float(_isfound(x, ranking_stat, compare_operator, threshold)) \
             for x in self.data])
-        self.integrated_eff = integrand.mean()
-        self.integrated_err_low = self.integrated_err_high = \
-            integrand.std()
+        return integrand.mean(), integrand.std()
+
+    def clear_cache(self):
+        """
+        Clears self's _cached_volumes.
+        """
+        self._cached_volumes.clear()
 
     def create_html_page(self, out_dir, html_name, mapper=None,
             mainplots_widths=1000):
@@ -191,6 +260,12 @@ class PHyperCubeGain:
         # for grouping together phyper cubes
         self.parent = None
         self.children = []
+        # for storing plots and pages
+        self.volumes_vs_stat_plot = None
+        self.tiles_plot = None
+        self.subtiles_plot = None
+        self.additional_plots = []
+        self.html_page = None
 
     @property
     def reference_cube(self):
@@ -239,27 +314,58 @@ class PHyperCubeGain:
     def set_test_data(self, data):
         self._test_cube.set_data(data)
 
-    def integrate_efficiency(self, threshold,
-            ranking_stat='new_snr', rank_by='max'):
-        self._reference_cube.integrate_efficiences(threshold, ranking_stat,
-            rank_by)
-        self._test_cube.integrate_efficiences(threshold, ranking_stat, rank_by)
-        
-    def calculate_fractional_gain(self):
-        self.fractional_gain = self._test_cube.integrated_eff / \
-            self._reference_cube.integrated_eff
-        # error
-        self.gain_err_low = self.fractional_gain * \
-            numpy.sqrt((self._test_cube.integrated_err_low /\
-                self._test_cube.integrated_eff)**2. + \
-            (self._reference_cube.integrated_err_high /\
-                self._reference_cube.integrated_eff)**2.)
-        self.gain_err_high = self.fractional_gain * \
-            numpy.sqrt((self._test_cube.integrated_err_high /\
-                self._test_cube.integrated_eff)**2. + \
-            (self._reference_cube.integrated_err_low / \
-                self._reference_cube.integrated_eff)**2.)
-        return self.fractional_gain, self.gain_err_high, self.gain_err_low
+    def _set_ranking_params(ref_or_test, ranking_stat, rank_by):
+        """
+        Sets the reference or test cube's ranking_stat and rank_by. See
+        PHyperCube.set_ranking_params for details.
+        """
+        getattr(self, '_%s_cube' %(ref_or_test)).set_ranking_params(
+            ranking_stat, rank_by)
+
+    def set_reference_ranking_params(ranking_stat, rank_by):
+        """
+        Set's the reference cube's ranking params. See
+        PHyperCube.set_ranking_params for details.
+        """
+        self._set_ranking_params('reference', ranking_stat, rank_by)
+
+    def set_test_ranking_params(ranking_stat, rank_by):
+        """
+        Set's the test cube's ranking params.
+        """
+        self._set_ranking_params('test', ranking_stat, rank_by)
+
+    def get_fractional_gain(self, ref_threshold, test_threshold):
+        """
+        Gets the fractional gain and error.
+
+        Parameters
+        ----------
+        ref_threshold: float
+            The threshold to use for the reference data. The reference
+            ranking params must be set; see set_reference_ranking_params.
+        test_threshold: float
+            Same, but for the test data/cube.
+        """
+        if self._reference_cube.ranking_stat is None:
+            raise ValueError("reference ranking params not set")
+        if self._test_cube.ranking_stat is None:
+            raise ValueError("test ranking params not set")
+        ref_volume, ref_err = self._reference_cube.get_volume(ref_threshold)
+        test_volume, test_err = self._test_cube.get_volume(test_threshold)
+        fractional_gain = test_volume / ref_volume
+        gain_err = fractional_gain * \
+            numpy.sqrt((test_err / test_volume)**2. + \
+                       (ref_err / ref_volume)**2.)
+        return fractional_gain, gain_err
+
+    def create_html_page(self, out_dir, html_name, mapper=None,
+            mainplots_widths=1000):
+        """
+        Create's self html page. See _create_html_page for details.
+        """
+        _create_html_page(self, out_dir, html_name, mapper=mapper)
+        self.html_page = '%s/%s' %(out_dir, html_name)
 
 
 #
@@ -345,17 +451,9 @@ def _create_html_page(phyper_cube, out_dir, html_name, mainplots_widths=1000,
     # Now the body
     #
     print >> f, "<body>"
-    # we'll put the parent's bounds in the heading
+    # we'll put the bounds in the heading
     print >> f, "<h1>"
-    bounds = {}
-    for child in phyper_cube.children:
-        for (param, (lower, upper)) in child.bounds.items():
-            bounds.setdefault(param, [[], []])
-            bounds[param][0].append(lower)
-            bounds[param][1].append(upper)
-    for param in bounds:
-        bounds[param] = (min(bounds[param][0]), max(bounds[param][1]))
-    for (param, (lower, upper)) in sorted(bounds.items()):
+    for (param, (lower, upper)) in sorted(phyper_cube.bounds.items()):
         # if the param is a Parameter instance with a label, we can
         # just get the label to use from it; otherwise, we'll just use
         # the parameter name
@@ -371,6 +469,14 @@ def _create_html_page(phyper_cube, out_dir, html_name, mainplots_widths=1000,
         phyper_cube.nsamples)
     print >> f, "</h2>"
     print >> f, "<hr />"
+    # put the V vs stat plot
+    if phyper_cube.volumes_vs_stat_plot is not None:
+        mfig = phyper_cube.volumes_vs_stat_plot
+        figname = os.path.relpath(os.path.abspath(mfig.saved_filename),
+                os.path.dirname(os.path.abspath(html_page)))
+        print >> f, '<img src="%s" width="%i" />' %(figname,
+            mainplots_widths)
+        print >> f, "<hr />"
     # put the tiles plot
     if phyper_cube.tiles_plot is not None:
         # if no clickable elements, just add the plot
@@ -496,9 +602,9 @@ class Layer:
         """
         if distr == 'log10':
             bins = numpy.logspace(numpy.log10(minval), numpy.log10(maxval),
-                num=num)
+                num=num+1)
         elif distr == 'linear':
-            bins = numpy.linspace(minval, maxval, num=num)
+            bins = numpy.linspace(minval, maxval, num=num+1)
         else:
             raise ValueError("unrecognized distribution %s; " %(distr) +\
                 "options are 'linear' or 'log10'")
@@ -694,27 +800,30 @@ class Layer:
                 [getattr(child, 'set_%sdata' %(dset))(inherited_data) \
                     for child in parent.children]
 
-    def integrate_parent_efficiencies(self, threshold, ranking_stat='new_snr',
-            rank_by='max'):
+    def set_ranking_params(self, ranking_stat, rank_by, ref_or_test=None):
         """
-        Integrate the efficiencies of all of the parents in self. Note: this is
-        unecessary if the children of self's super layer have already been
-        integrated (since the children of self's super layer are the parents
-        of self).
+        Sets the ranking_stat and rank_by for all parent and children cubes
+        in self. If self's cube_type is PHyperCubeGain, ref_or_test must
+        be either 'reference' or 'test' to specify whehther to set the ranking
+        parameters of the reference or test cubes.
         """
-        [parent.integrate_efficiency(threshold, ranking_stat=ranking_stat,
-            rank_by=rank_by) for parent in self._parents \
-            if parent.nsamples > 1]
-                
+        if self._cube_type == PHyperCubeGain:
+            if not (ref_or_test == 'test' or ref_or_test == 'reference'):
+                raise ValueError("_cube_type is PHyperCubeGain, but " +
+                    "ref_or_test not set to 'reference' or 'test' (got %s)" %(
+                    str(ref_or_test)))
+            ref_or_test = '_%s' %(ref_or_test)
+        if self._cube_type == PHyperCube:
+            if ref_or_test != None:
+                raise ValueError("ref_or_test is not None, but _cube_type "+\
+                    "is PHyperCube")
+            ref_or_test = ''
 
-    def integrate_efficiencies(self, threshold, ranking_stat='new_snr',
-            rank_by='max'):
-        """
-        Integrate the efficiencies in all of the children in self.
-        """
-        [child.integrate_efficiency(threshold, ranking_stat=ranking_stat,
-            rank_by=rank_by) for child in self.all_children \
-            if child.nsamples > 1]
+        [getattr(parent, 'set_%sranking_params' %(ref_or_test))(ranking_stat,
+            rank_by) for parent in self.parents]
+        [getattr(child, 'set_%sranking_params' %(ref_or_test))(ranking_stat,
+            rank_by) for child in self.all_children]
+
 
 
 

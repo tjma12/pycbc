@@ -274,12 +274,12 @@ def get_injection_results(filenames, weight_function='uniform',
                     FROM
                         sim_inspiral_params AS sip
                     """
-                for simid, ifo, sigmasq, min_vol, w in cursor.execute(
+                for simid, ifo, sigmasq, min_vol, inj_weight in cursor.execute(
                         sipquery):
                     thisRes = results[id_map[thisfile, simid]]
                     thisRes.inj_sigma[ifo] = numpy.sqrt(sigmasq)
                     thisRes.inj_min_vol = min_vol
-                    thisRes.inj_weight = weight
+                    thisRes.inj_weight = inj_weight
 
         except sqlite3.OperationalError:
             cursor.close()
