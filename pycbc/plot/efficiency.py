@@ -52,6 +52,7 @@ class PHyperCube:
         self.data = None
         self._ranking_stat = None
         self._rank_by = None
+        self._stat_label = None
         self.nsamples = None
         self._cached_volumes = {}
         # for grouping together phyper cubes
@@ -136,7 +137,7 @@ class PHyperCube:
         self.data = plot_utils.slice_results(data, self.bounds)
         self.nsamples = len(self.data)
 
-    def set_ranking_params(self, ranking_stat, rank_by):
+    def set_ranking_params(self, ranking_stat, rank_by, stat_label=None):
         """
         Set self's ranking_stat and rank_by. These are needed to compute
         sensitive volumes.
@@ -157,6 +158,10 @@ class PHyperCube:
             raise ValueError("unrecognized rank_by argument %s; " %(rank_by) +\
                 "options are 'max' or 'min'")
         self._rank_by = rank_by
+        if stat_label is not None:
+            self._stat_label = stat_label
+        else:
+            self._stat_label = self._ranking_stat
 
     @property
     def ranking_stat(self):
@@ -166,6 +171,10 @@ class PHyperCube:
     def rank_by(self):
         return self._rank_by
         
+    @property
+    def stat_label(self):
+        return self._stat_label
+
     def get_volume(self, threshold):
         """
         Retrieves the sensitive volume using the given threshold of self's
@@ -229,11 +238,12 @@ class PHyperCube:
         self._cached_volumes.clear()
 
     def create_html_page(self, out_dir, html_name, mapper=None,
-            mainplots_widths=1000):
+            threshold=None, mainplots_widths=1000):
         """
         Create's self html page. See _create_html_page for details.
         """
-        _create_html_page(self, out_dir, html_name, mapper=mapper)
+        _create_html_page(self, out_dir, html_name, threshold=threshold,
+            mapper=mapper)
         self.html_page = '%s/%s' %(out_dir, html_name)
 
 
@@ -314,26 +324,28 @@ class PHyperCubeGain:
     def set_test_data(self, data):
         self._test_cube.set_data(data)
 
-    def _set_ranking_params(ref_or_test, ranking_stat, rank_by):
+    def _set_ranking_params(ref_or_test, ranking_stat, rank_by,
+            stat_label=None):
         """
         Sets the reference or test cube's ranking_stat and rank_by. See
         PHyperCube.set_ranking_params for details.
         """
         getattr(self, '_%s_cube' %(ref_or_test)).set_ranking_params(
-            ranking_stat, rank_by)
+            ranking_stat, rank_by, stat_label)
 
-    def set_reference_ranking_params(ranking_stat, rank_by):
+    def set_reference_ranking_params(ranking_stat, rank_by, stat_label=None):
         """
         Set's the reference cube's ranking params. See
         PHyperCube.set_ranking_params for details.
         """
-        self._set_ranking_params('reference', ranking_stat, rank_by)
+        self._set_ranking_params('reference', ranking_stat, rank_by,
+            stat_label)
 
-    def set_test_ranking_params(ranking_stat, rank_by):
+    def set_test_ranking_params(ranking_stat, rank_by, stat_label=None):
         """
         Set's the test cube's ranking params.
         """
-        self._set_ranking_params('test', ranking_stat, rank_by)
+        self._set_ranking_params('test', ranking_stat, rank_by, stat_label)
 
     def get_fractional_gain(self, ref_threshold, test_threshold):
         """
@@ -360,11 +372,12 @@ class PHyperCubeGain:
         return fractional_gain, gain_err
 
     def create_html_page(self, out_dir, html_name, mapper=None,
-            mainplots_widths=1000):
+            threshold=None, mainplots_widths=1000):
         """
         Create's self html page. See _create_html_page for details.
         """
-        _create_html_page(self, out_dir, html_name, mapper=mapper)
+        _create_html_page(self, out_dir, html_name, threshold=threshold,
+            mapper=mapper)
         self.html_page = '%s/%s' %(out_dir, html_name)
 
 
@@ -429,9 +442,48 @@ def _construct_links(plotted_cubes, tiles):
         tags.append('x: [%f, %f)\ny: [%f, %f)' %(bl[0], br[0], bl[1], tl[1]))
     return links, tags
 
+def format_volume_text(V, err):
+    """
+    Given a volume and it's, returns a latex string rounded to the appropriate
+    number of significant figures, with units.
+    """
+    conversion_factor = numpy.floor(numpy.log10(V))
+    V = V * 10**(-conversion_factor)
+    err = err * 10**(-conversion_factor)
+    # if the conversion factor is > 10^9, we'll change the label to Gpc
+    # (V is assumed to be in Mpc^3)
+    if conversion_factor >= 9:
+        conversion_factor -= 9.
+        units = 'Gpc'
+    else:
+        units = 'Mpc'
+    if conversion_factor == 0.:
+        prefactor = ''
+    elif conversion_factor == 1.:
+        prefactor = '10'
+    else:
+        prefactor = r'\times 10^{%i}' %(int(conversion_factor))
+    units_label = '%s\,\mathrm{%s}^3' %(prefactor, units)
 
-def _create_html_page(phyper_cube, out_dir, html_name, mainplots_widths=1000,
-        mapper=None):
+    # now round the the appropriate number of sig figs
+    voltxt = plot_utils.get_signum(V, err)
+    errtxt = plot_utils.get_signum(err, err)
+
+    return r'$%s \pm %s %s$' %(voltxt, errtxt, units_label)
+
+
+def drop_trailing_zeros(num):
+    """
+    Drops the trailing zeros in a float that is printed.
+    """
+    txt = '%f' %(num)
+    txt = txt.rstrip('0')
+    if txt.endswith('.'):
+        txt = txt[:-1]
+    return txt
+
+def _create_html_page(phyper_cube, out_dir, html_name, threshold=None,
+        mainplots_widths=1000, mapper=None):
     """
     Creates an html page for the given PHyperCube.
     """
@@ -461,12 +513,18 @@ def _create_html_page(phyper_cube, out_dir, html_name, mainplots_widths=1000,
             plbl = param.label
         except AttributeError:
             plbl = param
-        print >> f, r"%s $\in [%.2f, %.2f)$<br />" %(plbl, lower, upper)
+        print >> f, r"%s $\in [%s, %s)$<br />" %(plbl,
+            drop_trailing_zeros(lower), drop_trailing_zeros(upper))
     print >> f, "</h1>"
     # print some basic info about this cube
     print >> f, "<h2>"
     print >> f, "Total number of injections: %i<br />" %(
         phyper_cube.nsamples)
+    if threshold is not None and phyper_cube.nsamples > 1:
+        V, err = phyper_cube.get_volume(threshold)
+        print >> f, "Sensitive volume at %s $= %s$: %s<br />" %(
+            phyper_cube.stat_label, drop_trailing_zeros(threshold),
+            format_volume_text(V, err))
     print >> f, "</h2>"
     print >> f, "<hr />"
     # put the V vs stat plot
@@ -800,7 +858,8 @@ class Layer:
                 [getattr(child, 'set_%sdata' %(dset))(inherited_data) \
                     for child in parent.children]
 
-    def set_ranking_params(self, ranking_stat, rank_by, ref_or_test=None):
+    def set_ranking_params(self, ranking_stat, rank_by, stat_label=None,
+            ref_or_test=None):
         """
         Sets the ranking_stat and rank_by for all parent and children cubes
         in self. If self's cube_type is PHyperCubeGain, ref_or_test must
@@ -820,9 +879,9 @@ class Layer:
             ref_or_test = ''
 
         [getattr(parent, 'set_%sranking_params' %(ref_or_test))(ranking_stat,
-            rank_by) for parent in self.parents]
+            rank_by, stat_label) for parent in self.parents]
         [getattr(child, 'set_%sranking_params' %(ref_or_test))(ranking_stat,
-            rank_by) for child in self.all_children]
+            rank_by, stat_label) for child in self.all_children]
 
 
 

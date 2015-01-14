@@ -123,13 +123,13 @@ if apply_cut:
 # set the top level data and ranking parameters
 print "binning data"
 layers[0].set_cube_data(results)
-layers[0].set_ranking_params(ranking_stat, opts.rank_by)
+layers[0].set_ranking_params(ranking_stat, opts.rank_by, stat_label)
 
 # now go down through the other layers, set the rest of the data
 next_layer = layers[0].sub_layer
 while next_layer is not None:
     next_layer.set_cube_data_using_super()
-    next_layer.set_ranking_params(ranking_stat, opts.rank_by)
+    next_layer.set_ranking_params(ranking_stat, opts.rank_by, stat_label)
     next_layer = next_layer.sub_layer
 
 # Plot
@@ -181,7 +181,7 @@ while this_layer is not None:
             html_name = html_tmplt %(this_layer.web_dir, this_layer.level,
                 'child', ii)
             child.create_html_page(this_layer.root_dir, html_name,
-                mapper=None)
+                mapper=None, threshold=opts.threshold)
     # the top layer page is the index page; otherwise we use the template
     for ii,parent in enumerate(this_layer.parents):
         if this_layer.level == 0:
@@ -190,6 +190,6 @@ while this_layer is not None:
             html_name = html_tmplt %(this_layer.web_dir, this_layer.level,
                 'parent', ii)
         parent.create_html_page(this_layer.root_dir, html_name,
-            mapper=mapper)
+            mapper=mapper, threshold=opts.threshold)
 
     this_layer = this_layer.super_layer
