@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-__prog__ = 'collapps_inj'
+__prog__ = 'pycbc_inj'
 __author__ = 'Collin Capano <collin.capano@ligo.org>'
 __description__ = 'Creates an injection distribution given the input parameters.'
 

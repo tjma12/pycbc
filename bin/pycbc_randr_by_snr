@@ -1,6 +1,6 @@
 #! /usr/bin/env python
 
-__prog__ = 'collapps_randRbySNR'
+__prog__ = 'pycbc_randr_by_snr'
 __author__ = 'Collin Capano <collin.capano@ligo.org>'
 __description__ = 'Resets the distance distribution in a sim_inspiral table based on desired SNR. The SNRs are chosen randomly from a given range.'
 
@@ -193,8 +193,8 @@ for fnum, infile in enumerate(filenames):
         # if the ifo is None, we also need to divide by 2.26 to account for
         # the peanut shell
         if ifo is None:
-            min_vol /= 2.26
-            weight /= 2.26
+            min_vol /= 2.26**3.
+            weight /= 2.26**3.
 
         # save to the database; in an abuse of columns, we'll store
         # the injection duration to alpha;
