@@ -226,7 +226,7 @@ class PHyperCube:
         if self.nsamples <= 1:
             raise ValueError("there must be more than one sample to " +
                 "compute efficiency")
-        integrand = numpy.array([x.inj_weight * \
+        integrand = numpy.array([x.inj_min_vol + x.inj_weight * \
             float(_isfound(x, ranking_stat, compare_operator, threshold)) \
             for x in self.data])
         return integrand.mean(), integrand.std()
@@ -447,7 +447,10 @@ def format_volume_text(V, err):
     Given a volume and it's, returns a latex string rounded to the appropriate
     number of significant figures, with units.
     """
-    conversion_factor = numpy.floor(numpy.log10(V))
+    if V == 0.:
+        conversion_factor = 0.
+    else:
+        conversion_factor = numpy.floor(numpy.log10(V))
     V = V * 10**(-conversion_factor)
     err = err * 10**(-conversion_factor)
     # if the conversion factor is > 10^9, we'll change the label to Gpc

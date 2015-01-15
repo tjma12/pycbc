@@ -140,7 +140,8 @@ minvol = opts.minvol
 maxvol = opts.maxvol
 if minvol is None or maxvol is None:
     Vs = numpy.array([child.get_volume(opts.threshold) for layer in layers \
-        for child in layer.all_children if child.nsamples >= opts.min_ninj])
+        for child in layer.all_children if child.nsamples >= opts.min_ninj
+        and child.get_volume(opts.threshold)[0] != 0.])
     if minvol is None:
         minvol = Vs.min()
     if maxvol is None:

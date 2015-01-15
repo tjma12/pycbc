@@ -223,7 +223,8 @@ def plot_volumes(phyper_cubes, xarg, xlabel, yarg, ylabel, threshold,
 
     # only use cubes that have enough injections
     phyper_cubes = [this_cube for this_cube in phyper_cubes if \
-        this_cube.nsamples >= min_ninj]
+        this_cube.nsamples >= min_ninj and \
+        this_cube.get_volume(threshold)[0] != 0.]
 
     # if there is nothing to plot, just create an empty plot and return
     if len(phyper_cubes) == 0:
@@ -458,7 +459,8 @@ def plot_subvolumes(phyper_cubes, xarg, xlabel, yarg, ylabel,
     """
     # only use phyper_cubes that have enough injections
     phyper_cubes = [parent for parent in phyper_cubes \
-        if parent.nsamples >= min_ninj]
+        if parent.nsamples >= min_ninj and \
+        parent.get_volume(threshold)[0] != 0.]
 
     # if nothing to plot, just create an empty plot and return
     if phyper_cubes == []:
@@ -470,7 +472,8 @@ def plot_subvolumes(phyper_cubes, xarg, xlabel, yarg, ylabel,
     # to ensure we get properly normalized colors, find the largest
     # and smallest Vs across all of the children of all of the phyper_cubes
     Vs = numpy.array([child.get_volume(threshold) for parent in phyper_cubes \
-        for child in parent.children if child.nsamples >= min_ninj])[:,0]
+        for child in parent.children if child.nsamples >= min_ninj and \
+        child.get_volume(threshold)[0] != 0.])[:,0]
     minvol = Vs.min()
     maxvol = Vs.max()
 
