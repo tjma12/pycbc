@@ -22,6 +22,8 @@ parser.add_option('-R', '--ranking-stat', metavar='stat[:stat_label]', default=r
 parser.add_option('-B', '--rank-by', default='max', help='Options are "max" or "min". If max (min) an injection will be considered found if its ranking stat is >= (<) the threshold. Default is max.')
 parser.add_option('-r', '--stat-range', metavar='MIN_STAT,MAX_STAT[:log]', default='6,12', help='Stat range to use when creating volume vs. stat plots. Must specify both a minimum and a maximum. If would like the stat distribution to be log10, add ":log" after the max stat. Default is 6,12.')
 parser.add_option('-N', '--min-ninj', type='int', default=2, help='Minimum number of injections that must exist in a block in in order to calculate volume. If a block has less then this, it will be skipped. Default is 2.')
+parser.add_option('', '--print-relative-error', action='store_true', default=False, help='Turn on to print relative errors instead of absolute errors.')
+parser.add_option('', '--use-distance-bins', action='store_true', default=False, help="If turned on, will use distance bins to compute sensitive volumes, rather than the standard Monte Carlo method of using the average of the integrand. Generally, this will yield larger variance, so turn this on with caution.")
 parser.add_option('-p', '--subplots-cache', help='Load subplots for each tile from the given cache file.')
 parser.add_option('-o', '--output-dir', help='Directory to save results to.')
 parser.add_option('-u', '--user-tag', default='', help='Add a user tag to all output files.')
@@ -45,6 +47,9 @@ if not opts.cache_file:
 if not opts.output_dir:
     raise ValueError('output-dir required')
 
+# set the distance bins option if desired
+efficiency.PHyperCube.use_distance_bins = opts.use_distance_bins
+
 stat_info = opts.ranking_stat.split(':')
 if len(stat_info) == 1:
     ranking_stat = stat_info[0]
@@ -58,7 +63,7 @@ stat_info = opts.stat_range.split(',')
 if len(stat_info) != 2:
     raise ValueError("stat-range nto formatted correctly; see help")
 min_stat, max_stat = stat_info
-if max_stat.split(':') == 2:
+if len(max_stat.split(':')) == 2:
     max_stat, stat_dist = max_stat.split(':')
     if stat_dist != 'log':
         raise ValueError('unrecognized stat distribution %s '%(stat_dist) +
@@ -132,14 +137,13 @@ while next_layer is not None:
     next_layer.set_ranking_params(ranking_stat, opts.rank_by, stat_label)
     next_layer = next_layer.sub_layer
 
-# Plot
-print "plotting"
 # if min, max vol aren't specified, get the minimum/maximum volumes across
 # all of the tiles
 minvol = opts.minvol
 maxvol = opts.maxvol
 if minvol is None or maxvol is None:
-    Vs = numpy.array([child.get_volume(opts.threshold) for layer in layers \
+    print "getting min, max volumes"
+    Vs = numpy.array([child.get_volume(opts.threshold)[0] for layer in layers \
         for child in layer.all_children if child.nsamples >= opts.min_ninj
         and child.get_volume(opts.threshold)[0] != 0.])
     if minvol is None:
@@ -147,6 +151,8 @@ if minvol is None or maxvol is None:
     if maxvol is None:
         maxvol = Vs.max()
 
+# Plot
+print "plotting"
 html_tmplt = '%slevel_%i-%s_%i.html'
 # we'll create the plots from the bottom layers up, so that we can provide
 # links to each lower layer
@@ -165,6 +171,7 @@ while this_layer is not None:
         user_tag=opts.user_tag, min_ninj=opts.min_ninj,
         tmplt_label='', inj_label='', colormap=opts.colormap,
         maxvol=maxvol, minvol=minvol, fontsize=opts.fontsize,
+        print_relative_err=opts.print_relative_error,
         logz=opts.logz, dpi=opts.dpi, verbose=True)
 
     # if not the last layer, create the subvolumes plot
@@ -182,7 +189,8 @@ while this_layer is not None:
             html_name = html_tmplt %(this_layer.web_dir, this_layer.level,
                 'child', ii)
             child.create_html_page(this_layer.root_dir, html_name,
-                mapper=None, threshold=opts.threshold)
+                mapper=None, threshold=opts.threshold,
+                print_relative_error=opts.print_relative_error)
     # the top layer page is the index page; otherwise we use the template
     for ii,parent in enumerate(this_layer.parents):
         if this_layer.level == 0:
@@ -191,6 +199,7 @@ while this_layer is not None:
             html_name = html_tmplt %(this_layer.web_dir, this_layer.level,
                 'parent', ii)
         parent.create_html_page(this_layer.root_dir, html_name,
-            mapper=mapper, threshold=opts.threshold)
+            mapper=mapper, threshold=opts.threshold,
+            print_relative_error=opts.print_relative_error)
 
     this_layer = this_layer.super_layer

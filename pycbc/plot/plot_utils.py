@@ -8,9 +8,19 @@ import lal
 import matplotlib
 from matplotlib import pyplot
 
-def get_signum(val, err, max_sig = numpy.inf):
+def drop_trailing_zeros(num):
     """
-    Given an error, returns a string for val to formated the appropriate
+    Drops the trailing zeros in a float that is printed.
+    """
+    txt = '%f' %(num)
+    txt = txt.rstrip('0')
+    if txt.endswith('.'):
+        txt = txt[:-1]
+    return txt
+
+def get_signum(val, err, max_sig=numpy.inf):
+    """
+    Given an error, returns a string for val formated to the appropriate
     number of significant figures.
     """
     coeff, pwr = ('%e' % err).split('e')
@@ -25,7 +35,13 @@ def get_signum(val, err, max_sig = numpy.inf):
         pwr = int(pwr[1:])
         if round(float(coeff)) == 10.:
             pwr += 1
-        return '%i' %(round(val, -pwr))
+        # if the error is large, we can sometimes get 0;
+        # adjust the round until we don't get 0
+        return_val = round(val, -pwr)
+        while return_val == 0.:
+            pwr -= 1
+            return_val = round(val, -pwr)
+        return drop_trailing_zeros(return_val)
 
 
 def ColorBarLog10Formatter(y, pos):
@@ -228,7 +244,7 @@ def get_injection_results(filenames, weight_function='uniform',
                 idx += 1
                 thisRes.apprx = apprx
                 # ensure that m1 is always > m2
-                if m2 > m1:
+                if False:#m2 > m1:
                     thisRes.m1 = m2
                     thisRes.m2 = m1
                     thisRes.s1z = s2z

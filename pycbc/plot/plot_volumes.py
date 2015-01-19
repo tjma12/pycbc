@@ -23,6 +23,7 @@ pyplot.rcParams.update({
 pyplot.rcParams['text.latex.preamble'].append(r'\usepackage{amsmath}')
 
 from pycbc.plot import plot_utils
+from pycbc.plot import efficiency
 import numpy
 import cPickle
 from optparse import OptionParser
@@ -74,12 +75,17 @@ def plot_volume_vs_stat_on_axes(ax, phyper_cube, min_stat, max_stat,
             numpy.log10(max_stat), nbins)
     else:
         thresholds = numpy.linspace(min_stat, max_stat, nbins)
+    # volumes is a 2D array: the first column is the volumes, the
+    # second the error. If old_method is used, the third column is the
+    # lower-bound of the volume.
     volumes = numpy.array([phyper_cube.get_volume(xhat) for xhat in \
         thresholds])
-    # volumes is a 2D array, with the first column being the volumes, the
-    # second the error
     Vs = volumes[:,0]
-    errs = volumes[:,1]
+    errs_high = volumes[:,1]
+    if phyper_cube.use_distance_bins:
+        errs_low = volumes[:,2]
+    else:
+        errs_low = errs_high
     vline = ax.plot(thresholds, Vs, color=color, lw=2, zorder=2)
     # we'll plot the error region a filled space; fill works counter-clockwise
     # around the polygon formed by the error region
@@ -87,8 +93,8 @@ def plot_volume_vs_stat_on_axes(ax, phyper_cube, min_stat, max_stat,
     xvals[:Vs.shape[0]] = thresholds
     xvals[Vs.shape[0]:] = thresholds[::-1]
     yvals = numpy.zeros(2*Vs.shape[0])
-    yvals[:Vs.shape[0]] = Vs - errs
-    yvals[Vs.shape[0]:] = (Vs + errs)[::-1]
+    yvals[:Vs.shape[0]] = Vs - errs_low
+    yvals[Vs.shape[0]:] = (Vs + errs_high)[::-1]
     # if logy, replace any negative or 0 values with the smallest non-zero
     if logy and yvals.min() <= 0:
         replace_idx = numpy.where(yvals[:Vs.shape[0]] <= 0.)
@@ -205,7 +211,7 @@ def plot_volume_vs_stat_from_layer(layer, min_stat, max_stat, stat_label,
 def plot_volumes(phyper_cubes, xarg, xlabel, yarg, ylabel, threshold,
         min_ninj=2, tmplt_label = '', inj_label='', add_title=True,
         colormap='hot', maxvol=None, minvol=None, add_colorbar=False,
-        annotate=True, fontsize=8, 
+        annotate=True, fontsize=8, print_relative_err=False, 
         logx=False, logy=False, logz=False,
         xmin=None, xmax=None, ymin=None, ymax=None, fig=None,
         ax=None, add_clickables=True, dpi=300):
@@ -231,16 +237,18 @@ def plot_volumes(phyper_cubes, xarg, xlabel, yarg, ylabel, threshold,
         empty_plot(ax)
         return mfig
 
-    # volumes is a 2D array, with the first column being the volumes, the
-    # second the error
-    volumes = numpy.array([this_cube.get_volume(threshold) for this_cube in \
-        phyper_cubes])
+    # volumes is a 2D array; the first column are the volumes, the
+    # second the plus error, the third the minus error
+    volumes = numpy.array([this_cube.get_volume(threshold) \
+        for this_cube in phyper_cubes]).astype(numpy.float)
     Vs = volumes[:,0]
-    errs = volumes[:,1]
+    plus_errs = volumes[:,1]
+    minus_errs = volumes[:,2]
     # we'll divide by the closest power of 10 of the smallest value
     conversion_factor = numpy.floor(numpy.log10(Vs.min()))
-    # note that the following adjusts both Vs and errs at once
-    volumes *= 10**(-conversion_factor)
+    Vs *= 10**(-conversion_factor)
+    plus_errs *= 10**(-conversion_factor)
+    minus_errs *= 10**(-conversion_factor)
     if minvol is not None:
         minvol *= 10**(-conversion_factor)
     if maxvol is not None:
@@ -270,7 +278,8 @@ def plot_volumes(phyper_cubes, xarg, xlabel, yarg, ylabel, threshold,
         maxvol = numpy.log10(maxvol)
 
     # now cycle over the cubes and create each plot tile
-    for V,err,this_cube in zip(Vs, errs, phyper_cubes):
+    for V, err_plus, err_minus, this_cube in zip(Vs, plus_errs, minus_errs,
+            phyper_cubes):
 
         # get the x, y corners of the tile from the bounds
         xlow, xhigh = this_cube.get_bound(xarg)
@@ -292,17 +301,17 @@ def plot_volumes(phyper_cubes, xarg, xlabel, yarg, ylabel, threshold,
         r, g, b, a = clr
         clr_grayscale = 0.299*r + 0.587*g + 0.114*b
         if annotate:
-            if clr_grayscale < 0.5:
+            if clr_grayscale < 0.25:
                 txt_clr = 'w'
             else:
                 txt_clr = 'k'
-            # get the text to print
+            # get the text to print; note that if we are using logz, we convert
+            # V back to normal here
             if logz:
-                voltxt = plot_utils.get_signum(10**V, err)
-            else:
-                voltxt = plot_utils.get_signum(V, err)
-            errtxt = plot_utils.get_signum(err, err)
-            txt_str = r'$\mathsf{\underset{\pm %s}{%s}}$' %(errtxt, voltxt)
+                V = 10**V
+            txt_str = efficiency.format_volume_text(V, err_plus, err_minus,
+                include_units=False, use_scientific_notation=False,
+                use_relative_err=print_relative_err)
             if logx:
                 txtx = numpy.log10(10**min(x) + (10**max(x)-10**min(x))/2.)
             else:
@@ -401,7 +410,8 @@ def plot_volumes(phyper_cubes, xarg, xlabel, yarg, ylabel, threshold,
 
 def plot_volumes_from_layer(layer, threshold, user_tag='', min_ninj=1,
         tmplt_label='', inj_label='',
-        colormap='hot', maxvol=None, minvol=None, fontsize=8, 
+        colormap='hot', maxvol=None, minvol=None, fontsize=8,
+        print_relative_err=False, 
         logz=False, dpi=300, verbose=False):
     """
     Wrapper around plot_volumes that creates a volume plot for every
@@ -435,6 +445,7 @@ def plot_volumes_from_layer(layer, threshold, user_tag='', min_ninj=1,
             tmplt_label=tmplt_label, inj_label=inj_label, annotate=True,
             add_colorbar=False, colormap=colormap, maxvol=maxvol,
             minvol=minvol, fontsize=fontsize,
+            print_relative_err=print_relative_err,
             logx=layer.x_distr == 'log10', logy=layer.y_distr == 'log10',
             logz=logz, xmin=layer.plot_x_min, xmax=layer.plot_x_max,
             ymin=layer.plot_y_min, ymax=layer.plot_y_max)

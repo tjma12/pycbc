@@ -45,6 +45,9 @@ def mapper_header(mapper_jsfile):
 #
 #
 class PHyperCube:
+
+    use_distance_bins = False
+
     def __init__(self, bounds=None):
         self._bounds = {}
         if bounds is not None:
@@ -205,11 +208,19 @@ class PHyperCube:
             if self._ranking_stat is None:
                 raise ValueError("must set ranking_stat and rank_by first; " +
                     "see set_ranking_params()")
-            volume, err = self._integrate_efficiency(threshold,
-                self._ranking_stat, self._rank_by)
+            if self.use_distance_bins:
+                volume, err_high, err_low = self._old_integrate_efficiencies(
+                    self._ranking_stat, self._rank_by, threshold)
+                volume /= 2.26**3.
+                err_high /= 2.26**3.
+                err_low /= 2.26**3.
+            else:
+                volume, err_high = self._integrate_efficiency(threshold,
+                    self._ranking_stat, self._rank_by)
+                err_low = err_high
             self._cached_volumes[threshold,self._ranking_stat,self._rank_by] =\
-                (volume, err)
-            return volume, err
+                volume, err_high, err_low
+            return volume, err_high, err_low
 
     def _integrate_efficiency(self, threshold, ranking_stat, rank_by):
         """
@@ -229,7 +240,7 @@ class PHyperCube:
         integrand = numpy.array([x.inj_min_vol + x.inj_weight * \
             float(_isfound(x, ranking_stat, compare_operator, threshold)) \
             for x in self.data])
-        return integrand.mean(), integrand.std()
+        return integrand.mean(), integrand.std()/numpy.sqrt(len(integrand))
 
     def clear_cache(self):
         """
@@ -238,13 +249,119 @@ class PHyperCube:
         self._cached_volumes.clear()
 
     def create_html_page(self, out_dir, html_name, mapper=None,
-            threshold=None, mainplots_widths=1000):
+            threshold=None, mainplots_widths=1000, print_relative_error=False):
         """
         Create's self html page. See _create_html_page for details.
         """
         _create_html_page(self, out_dir, html_name, threshold=threshold,
-            mapper=mapper)
+            mainplots_widths=mainplots_widths,
+            print_relative_error=print_relative_error, mapper=mapper)
         self.html_page = '%s/%s' %(out_dir, html_name)
+
+
+    def _old_calculate_efficiencies(self, ranking_stat, rank_by, threshold,
+            nbins=20, d_distr='log10'):
+        if rank_by == 'max':
+            compare_operator = operator.ge
+        elif rank_by == 'min':
+            compare_operator = operator.lt
+        else:
+            raise ValueError("unrecognized rank_by argument %s; " %(rank_by) +\
+                "options are 'max' or 'min'")
+        distances = numpy.array([x.distance for x in self.data])
+        min_dist = distances.min()
+        max_dist = distances.max()
+        if d_distr == 'log10':
+            dist_bins = numpy.logspace(numpy.log10(min_dist),
+                numpy.log10(max_dist), num=nbins)
+        elif d_distr == 'linear':
+            dist_bins = numpy.linspace(min_dist, max_dist, num=nbins)
+        else:
+            raise ValueError, "unrecognized distribution %s" % d_distr
+
+        dist_bins[-1] *= 1.01
+
+        # calculate the efficiency in each distance bin
+        numFound = numpy.zeros(len(dist_bins)-1)
+        numTotal = numpy.zeros(len(dist_bins)-1)
+        for kk,dbin in enumerate(dist_bins[:-1]):
+            nextbin = dist_bins[kk+1]
+            group_idx = numpy.intersect1d(numpy.where(distances >= dbin)[0],
+                numpy.where(distances < nextbin)[0])
+            found_or_missed = numpy.array([_isfound(self.data[idx],
+                ranking_stat, compare_operator, threshold) for idx in \
+                group_idx])
+            numFound[kk] = float(len(numpy.where(found_or_missed)[0]))
+            numTotal[kk] = float(len(found_or_missed))
+
+        numMissed = numTotal - numFound
+        # if some bins have no injections in them
+        # we'll combine with adjacent bins
+        nzidx = numpy.nonzero(numTotal)
+        numTotal = numTotal[nzidx]
+        numFound = numFound[nzidx]
+        numMissed = numMissed[nzidx]
+        dist_bins = numpy.array(dist_bins[nzidx].tolist() + [dist_bins[-1]])
+
+        thisEff = numFound / numTotal
+
+        # the error in the efficiency comes from eqn. 1.9 in J.T. Whalen's 
+        # note cbc/protected/review/notes/poisson_errors.pdf in the
+        # ligo/virgo cvs
+        effPlus = (numTotal*(2.*numFound + 1.) + numpy.sqrt(
+            4.*numTotal*numFound*(numTotal - numFound) + numTotal**2)) / \
+            (2*numTotal*(numTotal + 1))
+        effMinus = (numTotal*(2.*numFound + 1.) - numpy.sqrt(
+            4.*numTotal*numFound*(numTotal - numFound) + numTotal**2)) / \
+            (2*numTotal*(numTotal + 1))
+        effPlus = effPlus - thisEff
+        effMinus = thisEff - effMinus
+
+        return thisEff, effPlus, effMinus, dist_bins
+
+
+    def _old_integrate_efficiencies(self, ranking_stat, rank_by, threshold,
+            nbins=20, d_distr='log10'):
+
+        # calculate the efficiency
+        efficiencies, eff_err_high, eff_err_low, distances = \
+            self._old_calculate_efficiencies(ranking_stat, rank_by, threshold,
+            nbins, d_distr)
+        # now integrate
+        if d_distr == 'linear':
+            this_dist = distances[:-1] + numpy.diff(distances)/2.
+            dr = numpy.diff(distances)
+            integrated_eff = 4*numpy.pi*(
+                efficiencies * this_dist**2 * dr).sum() + \
+                (4./3)*numpy.pi*distances[0]**3
+            # error
+            integrated_err_low = 4*numpy.pi*numpy.sqrt(((
+                eff_err_low * this_dist**2 * dr)**2).sum())
+            integrated_err_high = 4*numpy.pi*numpy.sqrt(((
+                eff_err_high * this_dist**2 * dr)**2).sum())
+        elif d_distr == 'log10':
+            this_dist = 10**(numpy.log10(distances[:-1]) + numpy.diff(
+                numpy.log10(distances))/2)
+            # in this case we use:
+            # int(eff) =
+            # \int eff(r) r**2 \dr = ln10 \int eff(log10 r) r**3 \dlog10r
+            dr = numpy.diff(numpy.log10(distances))
+            integrated_eff = numpy.log(10)*(
+                4.*numpy.pi*efficiencies * this_dist**3 * dr).sum() + \
+                4*numpy.pi*(1./3)*distances[0]**3
+            # error
+            # note that in the following we're assuming the error in the
+            # efficiency below and above the measured region is 0
+            integrated_err_low = 4.*numpy.pi*numpy.sqrt(((
+                eff_err_low * this_dist**3 * dr)**2).sum())
+            integrated_err_high = 4.*numpy.pi*numpy.sqrt(((
+                eff_err_high * this_dist**3 * dr)**2).sum())
+        else:
+            raise ValueError, 'unrecognized distance distribution %s' % d_distr
+
+        return integrated_eff, integrated_err_high, integrated_err_low
+
+
 
 
 class PHyperCubeGain:
@@ -363,8 +480,8 @@ class PHyperCubeGain:
             raise ValueError("reference ranking params not set")
         if self._test_cube.ranking_stat is None:
             raise ValueError("test ranking params not set")
-        ref_volume, ref_err = self._reference_cube.get_volume(ref_threshold)
-        test_volume, test_err = self._test_cube.get_volume(test_threshold)
+        ref_volume, ref_err, _ = self._reference_cube.get_volume(ref_threshold)
+        test_volume, test_err, _ = self._test_cube.get_volume(test_threshold)
         fractional_gain = test_volume / ref_volume
         gain_err = fractional_gain * \
             numpy.sqrt((test_err / test_volume)**2. + \
@@ -406,7 +523,8 @@ def _isfound(result, ranking_stat, compare_operator, threshold):
     -------
     _isfound: bool
     """
-    return compare_operator(getattr(result, ranking_stat), threshold)
+    return compare_operator(plot_utils.get_arg(result, ranking_stat),
+        threshold)
 
 
 def ischild(parent, child):
@@ -442,51 +560,72 @@ def _construct_links(plotted_cubes, tiles):
         tags.append('x: [%f, %f)\ny: [%f, %f)' %(bl[0], br[0], bl[1], tl[1]))
     return links, tags
 
-def format_volume_text(V, err):
+
+def format_volume_text(V, err_plus, err_minus=None, include_units=True,
+        use_scientific_notation=True, use_relative_err=False):
     """
     Given a volume and it's, returns a latex string rounded to the appropriate
     number of significant figures, with units.
     """
-    if V == 0.:
+    if err_minus is None:
+        err_minus = err_plus
+    if not use_scientific_notation or V == 0.:
         conversion_factor = 0.
     else:
         conversion_factor = numpy.floor(numpy.log10(V))
     V = V * 10**(-conversion_factor)
-    err = err * 10**(-conversion_factor)
+    err_plus = err_plus * 10**(-conversion_factor)
+    err_minus = err_minus * 10**(-conversion_factor)
+    err = min(err_minus, err_plus)
     # if the conversion factor is > 10^9, we'll change the label to Gpc
     # (V is assumed to be in Mpc^3)
-    if conversion_factor >= 9:
+    if conversion_factor >= 9 and include_units:
         conversion_factor -= 9.
-        units = 'Gpc'
+        units = '\mathrm{Gpc}^3'
+    elif include_units:
+        units = '\mathrm{Mpc}^3'
     else:
-        units = 'Mpc'
+        units = ''
     if conversion_factor == 0.:
         prefactor = ''
     elif conversion_factor == 1.:
-        prefactor = '10'
+        prefactor = r'\times 10'
     else:
         prefactor = r'\times 10^{%i}' %(int(conversion_factor))
-    units_label = '%s\,\mathrm{%s}^3' %(prefactor, units)
+    units_label = '%s\,%s' %(prefactor, units)
 
     # now round the the appropriate number of sig figs
     voltxt = plot_utils.get_signum(V, err)
-    errtxt = plot_utils.get_signum(err, err)
+    if err_plus == err_minus:
+        errtxt = plot_utils.get_signum(err, err)
+        if use_relative_err and float(voltxt) != 0.:
+            relative_err = 100.*float(errtxt)/float(voltxt)
+            # we round the relative error to the nearest 1% using get_signum;
+            # Note that if the relative error is < 1%, get_signum will
+            # automatically increase the number of values after the decimal
+            # until it gets to the first non-zero value
+            relative_err = plot_utils.get_signum(relative_err, 1.)
+            return r'$%s %s \pm %s \%%$' %(voltxt, units_label, relative_err)
+        else: 
+            return r'$%s \pm %s %s$' %(voltxt, errtxt, units_label)
+    else:
+        err_minus_txt = plot_utils.get_signum(err_minus, err)
+        err_plus_txt = plot_utils.get_signum(err_plus, err)
+        if use_relative_err and float(voltxt) != 0.:
+            # same as above, but with plus and minus
+            rel_err_plus = plot_utils.get_signum(
+                100.*float(err_plus_txt)/float(voltxt), 1.)
+            rel_err_minus = plot_utils.get_signum(
+                100.*float(err_minus_txt)/float(voltxt), 1.)
+            return r'$%s %s \substack{+%s\\-%s}\%%$' %(voltxt, units_label,
+                rel_err_plus, rel_err_minus)
+        else:
+            return r'$%s \substack{+ %s\\- %s} %s$' %(voltxt, err_plus_txt,
+                err_minus_txt, units_label)
 
-    return r'$%s \pm %s %s$' %(voltxt, errtxt, units_label)
-
-
-def drop_trailing_zeros(num):
-    """
-    Drops the trailing zeros in a float that is printed.
-    """
-    txt = '%f' %(num)
-    txt = txt.rstrip('0')
-    if txt.endswith('.'):
-        txt = txt[:-1]
-    return txt
 
 def _create_html_page(phyper_cube, out_dir, html_name, threshold=None,
-        mainplots_widths=1000, mapper=None):
+        mainplots_widths=1000, print_relative_error=False, mapper=None):
     """
     Creates an html page for the given PHyperCube.
     """
@@ -517,17 +656,20 @@ def _create_html_page(phyper_cube, out_dir, html_name, threshold=None,
         except AttributeError:
             plbl = param
         print >> f, r"%s $\in [%s, %s)$<br />" %(plbl,
-            drop_trailing_zeros(lower), drop_trailing_zeros(upper))
+            plot_utils.drop_trailing_zeros(lower),
+            plot_utils.drop_trailing_zeros(upper))
     print >> f, "</h1>"
     # print some basic info about this cube
     print >> f, "<h2>"
     print >> f, "Total number of injections: %i<br />" %(
         phyper_cube.nsamples)
     if threshold is not None and phyper_cube.nsamples > 1:
-        V, err = phyper_cube.get_volume(threshold)
-        print >> f, "Sensitive volume at %s $= %s$: %s<br />" %(
-            phyper_cube.stat_label, drop_trailing_zeros(threshold),
-            format_volume_text(V, err))
+        V, err, err_minus = phyper_cube.get_volume(threshold)
+        print >> f, "Sensitive volume at %s $= %s$:<br />&nbsp&nbsp%s<br />" %(
+            phyper_cube.stat_label, plot_utils.drop_trailing_zeros(threshold),
+            format_volume_text(V, err, err_minus=err_minus,
+            use_relative_err=print_relative_error))
+            
     print >> f, "</h2>"
     print >> f, "<hr />"
     # put the V vs stat plot
