@@ -260,7 +260,7 @@ class PHyperCube:
 
 
     def _old_calculate_efficiencies(self, ranking_stat, rank_by, threshold,
-            nbins=20, d_distr='log10'):
+            nbins=20, d_distr='linear'):
         if rank_by == 'max':
             compare_operator = operator.ge
         elif rank_by == 'min':
@@ -281,12 +281,13 @@ class PHyperCube:
 
         dist_bins[-1] *= 1.01
 
-        # calculate the efficiency in each distance bin
+        # calculate the average efficiency in each distance bin
         numFound = numpy.zeros(len(dist_bins)-1)
         numTotal = numpy.zeros(len(dist_bins)-1)
         for kk,dbin in enumerate(dist_bins[:-1]):
             nextbin = dist_bins[kk+1]
-            group_idx = numpy.intersect1d(numpy.where(distances >= dbin)[0],
+            group_idx = numpy.intersect1d(
+                numpy.where(distances >= dbin)[0],
                 numpy.where(distances < nextbin)[0])
             found_or_missed = numpy.array([_isfound(self.data[idx],
                 ranking_stat, compare_operator, threshold) for idx in \
@@ -301,27 +302,34 @@ class PHyperCube:
         numTotal = numTotal[nzidx]
         numFound = numFound[nzidx]
         numMissed = numMissed[nzidx]
-        dist_bins = numpy.array(dist_bins[nzidx].tolist() + [dist_bins[-1]])
+        dist_bins = numpy.array(dist_bins[nzidx].tolist() + \
+            [dist_bins[-1]])
 
         thisEff = numFound / numTotal
 
-        # the error in the efficiency comes from eqn. 1.9 in J.T. Whalen's 
-        # note cbc/protected/review/notes/poisson_errors.pdf in the
-        # ligo/virgo cvs
-        effPlus = (numTotal*(2.*numFound + 1.) + numpy.sqrt(
-            4.*numTotal*numFound*(numTotal - numFound) + numTotal**2)) / \
-            (2*numTotal*(numTotal + 1))
-        effMinus = (numTotal*(2.*numFound + 1.) - numpy.sqrt(
-            4.*numTotal*numFound*(numTotal - numFound) + numTotal**2)) / \
-            (2*numTotal*(numTotal + 1))
-        effPlus = effPlus - thisEff
-        effMinus = thisEff - effMinus
+        use_frequentist_ci = True
+        if use_frequentist_ci:
+            # the error in the efficiency comes from eqn. 1.9 in J.T. Whalen's 
+            # note cbc/protected/review/notes/poisson_errors.pdf in the
+            # ligo/virgo cvs
+            effPlus = (numTotal*(2.*numFound + 1.) + numpy.sqrt(
+                4.*numTotal*numFound*(numTotal - numFound) + numTotal**2)) / \
+                (2*numTotal*(numTotal + 1))
+            effMinus = (numTotal*(2.*numFound + 1.) - numpy.sqrt(
+                4.*numTotal*numFound*(numTotal - numFound) + numTotal**2)) / \
+                (2*numTotal*(numTotal + 1))
+            effPlus = effPlus - thisEff
+            effMinus = thisEff - effMinus
+
+        else:
+            effPlus = numpy.sqrt(thisEff*(1. - thisEff)/numTotal)
+            effMinus = effPlus
 
         return thisEff, effPlus, effMinus, dist_bins
 
 
     def _old_integrate_efficiencies(self, ranking_stat, rank_by, threshold,
-            nbins=20, d_distr='log10'):
+            nbins=20, d_distr='linear'):
 
         # calculate the efficiency
         efficiencies, eff_err_high, eff_err_low, distances = \
