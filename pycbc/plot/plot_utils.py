@@ -103,6 +103,14 @@ class Result:
         self.tmplt_s2z = None
 
     @property
+    def optimal_snr(self):
+        """
+        Returns the quadrature sum of the inj_sigmas divided by the distance.
+        """
+        return numpy.sqrt((numpy.array(self.inj_sigma.values())**2.).sum()) \
+            / self.distance
+
+    @property
     def mtotal(self):
         return self.m1 + self.m2
 
@@ -300,7 +308,10 @@ def get_injection_results(filenames, weight_function='uniform',
                     """
                 for simid, ifo, sigmasq, min_vol, inj_weight in cursor.execute(
                         sipquery):
-                    thisRes = results[id_map[thisfile, simid]]
+                    try:
+                        thisRes = results[id_map[thisfile, simid]]
+                    except KeyError:
+                        continue
                     thisRes.inj_sigma[ifo] = numpy.sqrt(sigmasq)
                     thisRes.inj_min_vol = min_vol
                     thisRes.inj_weight = inj_weight

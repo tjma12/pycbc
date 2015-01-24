@@ -1,0 +1,263 @@
+#! /usr/bin/env python
+
+__prog__ = "pycbc_plot_gain"
+__author__ = "Collin Capano <collin.capano@ligo.org>"
+__description__ = \
+"""Creates plots of relative gain between two runs. Will also gather plots
+from other progams and place them on the summary pages."""
+
+import os, sys, shutil
+from optparse import OptionParser
+import numpy
+from pycbc.plot import plot_utils
+from pycbc.plot import efficiency
+from pycbc.plot import plot_volumes
+
+
+def get_stat_range(opt):
+    stat_info = opt.split(',')
+    if len(stat_info) != 2:
+        raise ValueError("stat-range not formatted correctly; see help")
+    min_stat, max_stat = stat_info
+    min_stat = float(min_stat)
+    max_stat = float(max_stat)
+
+    return min_stat, max_stat
+
+
+def get_stat_info(opt):
+    stat_info = opt.split(':')
+    if len(stat_info) == 1:
+        stat = stat_info[0]
+        stat_label = stat.replace('_', ' ')
+    elif len(stat_info) == 2:
+        stat, stat_label = stat_info
+    else:
+        stat = stat_label = None
+    return stat, stat_label
+
+
+parser = OptionParser()
+parser.add_option('-c', '--test-cache-file', help='Required. Cache file containing test result databases.')
+parser.add_option('', '--reference-cache-file', help='Required if reference-stat is not "optimal". Cache file containing reference result databases.')
+parser.add_option('-l', '--layer-config-file', help='Required. A config file containing the layer parameters to use.') 
+parser.add_option('', '--reference-threshold', type='float', help='Required. The value of the ranking stat to use as the threshold when computing efficiencies for the reference run.')
+parser.add_option('', '--test-threshold', type='float', help='Required. The value of the ranking stat to use as the threshold when computing efficiencies for the test run.')
+parser.add_option('-t', '--test-stat', metavar='stat[:stat_label]', default=r'new_snr:$\hat{\rho}$:max', help='The ranking stat to use for computing efficiency of the test results. Can also specify a stat label for plotting (latex math should be enclosed in $ signs).')
+parser.add_option('', '--reference-stat', metavar='optimal|stat[:stat_label]', help='Required. Must be either "optimal", or the ranking stat to use for computing efficiency. If "optimal," the results in the test cache file will be compared to what the SNR of each injection would be in Gaussian noise. This is the overlap of each injection with itself ("sigma") divided by 1Mpc. If not "optimal", a reference-cache file must be specified. A stat label for plotting can also be provided if not "optimal."')
+parser.add_option('', '--test-rank-by', default='max', help='Options are "max" or "min". If max (min) an injection in the test results will be considered found if its ranking stat is >= (<) the threshold. Default is max.')
+parser.add_option('', '--reference-rank-by', default='max', help='Same as test-rank-by, but for the reference results. Ignored if "reference-stat is "optimal". Default is max.')
+parser.add_option('', '--test-stat-range', metavar='MIN_STAT,MAX_STAT', help='Required. Stat range to use when creating volume vs. stat plots for the test results. Must specify both a minimum and a maximum.')
+parser.add_option('', '--reference-stat-range', metavar='MIN_STAT,MAX_STAT', help='Required. Stat range to use when creating volume vs. stat plots for the reference results. Must specify both a minimum and a maximum. This must be provided even if reference-stat is "optimal."')
+parser.add_option('', '--log-stat', action='store_true', default=False, help='Make the x-axis of the volume vs ranking-stat plots log10. This will make both the test and reference stats log10.')
+parser.add_option('-N', '--min-ninj', type='int', default=2, help='Minimum number of injections that must exist in a block in in order to calculate volume. If a block has less then this, it will be skipped. Default is 2.')
+parser.add_option('', '--print-relative-error', action='store_true', default=False, help='Turn on to print relative errors instead of absolute errors.')
+parser.add_option('', '--use-distance-bins', action='store_true', default=False, help="If turned on, will use distance bins to compute sensitive volumes, rather than the standard Monte Carlo method of using the average of the integrand. Generally, this will yield larger variance, so turn this on with caution.")
+parser.add_option('-p', '--subplots-cache', help='Load subplots for each tile from the given cache file.')
+parser.add_option('-o', '--output-dir', help='Directory to save results to.')
+parser.add_option('-u', '--user-tag', default='', help='Add a user tag to all output files.')
+parser.add_option('', '--colormap', default='Greens', help='What color map to use for fractional gain plots. Default is Greens.')
+parser.add_option('', '--mingain', type='float', default=None, help='Minimum gain to color. Default is to use whatever the minium gain found is.')
+parser.add_option('', '--maxgain', type='float', default=None, help='Maximum gain to color. Default is to use whatever the maximum gain found is.')
+parser.add_option('', '--fontsize', type='int', default=8, help='Fontsize to use in volume plots. Default is 8.')
+parser.add_option('', '--logz', action='store_true', default=False, help='Make coloring log10.')
+parser.add_option('', '--dpi', type='int', default=300, help='dpi to use for plots; default is 300')
+parser.add_option('-P', '--apply-cut', action = 'append', default = [], metavar = 'arg:min,max', help = 'apply cut to injections; can specify multiple times')
+parser.add_option('-M', '--mapper', default=None, help="Specify the location of a mapper.js JavaScript in order to highlight tiles on mouse over.")
+
+opts, _ = parser.parse_args()
+
+if opts.user_tag is not None:
+    tag = '_%s' % opts.user_tag
+else:
+    tag = ''
+if not opts.test_cache_file:
+    raise ValueError('test-cache-file required')
+if opts.reference_cache_file is None and opts.reference_stat != 'optimal':
+    raise ValueError('referece-cache-file must be provided if reference-stat '+
+        'is not "optimal"')
+if not opts.output_dir:
+    raise ValueError('output-dir required')
+
+# set the distance bins option if desired
+efficiency.PHyperCube.use_distance_bins = opts.use_distance_bins
+
+test_stat, test_stat_label = get_stat_info(opts.test_stat)
+if test_stat is None:
+    raise ValueError("test-stat not formatted correctly; see help")
+test_rank_by = opts.test_rank_by
+
+if opts.reference_stat == 'optimal':
+    # format for optimal
+    ref_stat = 'optimal_snr'
+    ref_stat_label = r'optimal $\rho$'
+    ref_rank_by = 'max'
+else:
+    ref_stat, ref_stat_label = get_stat_info(opts.reference_stat)
+    if ref_stat is None:
+        raise ValueError("reference-stat not formatted correctly; see help")
+    ref_rank_by = opts.reference_rank_by
+
+if opts.test_stat_range is None:
+    raise ValueError("test-stat-range must be provided; see help")
+test_min_stat, test_max_stat = get_stat_range(opts.test_stat_range)
+
+if opts.reference_stat_range is None:
+    raise ValueError("reference-stat-range must be provided; see help")
+ref_min_stat, ref_max_stat= get_stat_range(opts.reference_stat_range)
+
+if opts.test_threshold is None:
+    raise ValueError("test-threshold must be provided; see help")
+test_threshold = opts.test_threshold
+if opts.reference_threshold is None:
+    raise ValueError("reference-threshold must be provided; see help")
+ref_threshold = opts.reference_threshold
+
+# load the layers
+print "loading layers"
+layers = efficiency.create_layers_from_config(opts.layer_config_file,
+    cube_type='gain')
+
+# create the directory structure: layer0 goes in the top level folder.
+# Each sub-layer are placed in sub-folders. Every folder has an images
+# directory where plots are stored.
+imgdir = 'images'
+scriptdir = 'scripts/'
+this_folder = '/'
+for ii,layer in enumerate(layers):
+    try:
+        os.mkdir('%s%s' %(opts.output_dir, this_folder))
+    except OSError:
+        pass
+    # make the images folder
+    try:
+        os.mkdir('%s%s%s' %(opts.output_dir, this_folder, imgdir))
+    except OSError:
+        pass
+    # make scripts foler if necessary
+    if opts.mapper is not None:
+        try:
+            os.mkdir('%s%s%s' %(opts.output_dir, this_folder, scriptdir))
+        except OSError:
+            pass
+        shutil.copy2(opts.mapper, '%s%s%s' %(
+            opts.output_dir, this_folder, scriptdir)) 
+        mapper = '%s/%s' %(scriptdir, os.path.basename(opts.mapper))
+    else:
+        mapper = None
+    layer.root_dir = opts.output_dir
+    layer.web_dir = this_folder
+    layer.images_dir = imgdir
+    # update this_folder for the next lower layer
+    this_folder = '%slevel%i/'%(this_folder, ii+1) 
+    
+# get the dictionary needed to apply cuts
+apply_cut = {}
+for thiscut in opts.apply_cut:
+    arg, vals = thiscut.split(':')
+    apply_cut[arg] = map(float, vals.split(','))
+
+print "getting test results"
+test_label = ''
+filenames = plot_utils.parse_results_cache(opts.test_cache_file)
+test_results, _ = plot_utils.get_injection_results(filenames, verbose=True)
+
+if apply_cut:
+    print "applying cuts"
+    test_results = plot_utils.slice_results(test_results, apply_cut)
+
+ref_label = ''
+if opts.reference_stat != 'optimal':
+    print "getting reference results"
+    filenames = plot_utils.parse_results_cache(opts.reference_cache_file)
+    ref_results, _ = plot_utils.get_injection_results(filenames, verbose=True)
+else:
+    # just set the reference data to be the same as the test
+    ref_results = test_results
+
+# set the top level data and ranking parameters
+print "binning data"
+layers[0].set_cube_data(test_results, 'test')
+layers[0].set_ranking_params(test_stat, test_rank_by, test_stat_label, 'test')
+layers[0].set_cube_data(ref_results, 'reference')
+layers[0].set_ranking_params(ref_stat, ref_rank_by, ref_stat_label,
+    'reference')
+
+# now go down through the other layers, set the rest of the data
+next_layer = layers[0].sub_layer
+while next_layer is not None:
+    next_layer.set_cube_data_using_super()
+    next_layer.set_ranking_params(test_stat, test_rank_by, test_stat_label,
+        'test')
+    next_layer.set_ranking_params(ref_stat, ref_rank_by, ref_stat_label,
+        'reference')
+    next_layer = next_layer.sub_layer
+
+# if min, max gain aren't specified, get the minimum/maximum gains across
+# all of the tiles
+mingain = opts.mingain
+maxgain = opts.maxgain
+if mingain is None or maxgain is None:
+    print "getting min, max gains"
+    Gs = numpy.array([child.get_fractional_gain(ref_threshold,
+        test_threshold)[0] for layer in layers \
+        for child in layer.all_children \
+            if child.nsamples >= opts.min_ninj and numpy.isfinite(
+            child.get_fractional_gain(ref_threshold, test_threshold)[0])])
+    if mingain is None:
+        mingain = Gs.min()
+    if maxgain is None:
+        maxgain = Gs.max()
+
+# Plot
+print "plotting"
+html_tmplt = '%slevel_%i-%s_%i.html'
+# we'll create the plots from the bottom layers up, so that we can provide
+# links to each lower layer
+this_layer = layers[-1]
+while this_layer is not None:
+    # for the bottom layer, we'll also create html and volume vs stat plots
+    # for the children
+    this_is_lowest_layer = this_layer.sub_layer is None
+    plot_volumes.plot_twovolume_vs_stat_from_layer(this_layer, test_min_stat,
+        test_max_stat, ref_min_stat, ref_max_stat, test_threshold,
+        ref_threshold, include_children=this_is_lowest_layer,
+        user_tag=opts.user_tag, min_ninj=opts.min_ninj, logx=opts.log_stat,
+        logy=True, nbins=20, dpi=opts.dpi, verbose=True)
+
+    plot_volumes.plot_gains_from_layer(this_layer, test_threshold,
+        ref_threshold, user_tag=opts.user_tag, min_ninj=opts.min_ninj,
+        test_label=test_label, ref_label=ref_label, colormap=opts.colormap,
+        maxgain=maxgain, mingain=mingain, fontsize=opts.fontsize,
+        print_relative_err=opts.print_relative_error,
+        logz=opts.logz, dpi=opts.dpi, verbose=True)
+
+    # if not the last layer, create the subvolumes plot
+    if this_layer.sub_layer is not None:
+        plot_volumes.plot_subgains_from_layer(this_layer, test_threshold,
+            ref_threshold, user_tag=opts.user_tag, min_ninj=opts.min_ninj,
+            test_label=test_label, ref_label=ref_label, colormap=opts.colormap,
+            maxgain=maxgain, mingain=mingain,
+            logz=opts.logz, dpi=opts.dpi, verbose=True)
+
+    # write the html page
+    # if this is the bottom layer, create pages for the children
+    if this_is_lowest_layer:
+        for ii,child in enumerate(this_layer.all_children):
+            html_name = html_tmplt %(this_layer.web_dir, this_layer.level,
+                'child', ii)
+            child.create_html_page(this_layer.root_dir, html_name,
+                test_threshold, ref_threshold, mapper=None,
+                print_relative_error=opts.print_relative_error)
+    # the top layer page is the index page; otherwise we use the template
+    for ii,parent in enumerate(this_layer.parents):
+        if this_layer.level == 0:
+            html_name = '/index.html'
+        else:
+            html_name = html_tmplt %(this_layer.web_dir, this_layer.level,
+                'parent', ii)
+        parent.create_html_page(this_layer.root_dir, html_name, test_threshold,
+            ref_threshold, mapper=mapper,
+            print_relative_error=opts.print_relative_error)
+
+    this_layer = this_layer.super_layer

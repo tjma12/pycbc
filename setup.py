@@ -324,6 +324,7 @@ setup (
                'bin/pycbc_generate_match_win',
                'bin/pycbc_plot_injrec',
                'bin/pycbc_plot_volumes',
+               'bin/pycbc_plot_gain',
                'bin/hdfcoinc/pycbc_coinc_mergetrigs',
                'bin/hdfcoinc/pycbc_coinc_findtrigs',
                'bin/hdfcoinc/pycbc_coinc_bank2hdf',

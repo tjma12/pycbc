@@ -248,12 +248,13 @@ class PHyperCube:
         """
         self._cached_volumes.clear()
 
-    def create_html_page(self, out_dir, html_name, mapper=None,
-            threshold=None, mainplots_widths=1000, print_relative_error=False):
+    def create_html_page(self, out_dir, html_name, threshold,
+            mainplots_widths=1000, print_relative_error=False,
+            mapper=None):
         """
         Create's self html page. See _create_html_page for details.
         """
-        _create_html_page(self, out_dir, html_name, threshold=threshold,
+        _create_html_page(self, out_dir, html_name, threshold,
             mainplots_widths=mainplots_widths,
             print_relative_error=print_relative_error, mapper=mapper)
         self.html_page = '%s/%s' %(out_dir, html_name)
@@ -370,8 +371,6 @@ class PHyperCube:
         return integrated_eff, integrated_err_high, integrated_err_low
 
 
-
-
 class PHyperCubeGain:
     """
     Class to store information about a "tile" in parameter space. A tile is
@@ -382,12 +381,13 @@ class PHyperCubeGain:
     numerator.
     """
     def __init__(self, bounds=None):
-        self._bounds = {}
-        if bounds is not None:
-            self.set_bounds(**bounds)
-        # values unique to each set
+        if bounds is None:
+            bounds = {}
         self._reference_cube = PHyperCube(bounds)
         self._test_cube = PHyperCube(bounds)
+        self._bounds = {}
+        if bounds:
+            self.set_bounds(**bounds)
         # values common to both
         self.fractional_gain = 0.
         self.gain_err_low = 0.
@@ -446,10 +446,22 @@ class PHyperCubeGain:
     def set_reference_data(self, data):
         self._reference_cube.set_data(data)
 
+    @property
+    def reference_data(self):
+        return self._reference_cube.data
+
     def set_test_data(self, data):
         self._test_cube.set_data(data)
 
-    def _set_ranking_params(ref_or_test, ranking_stat, rank_by,
+    @property
+    def test_data(self):
+        return self._test_cube.data
+
+    @property
+    def nsamples(self):
+        return min(self._test_cube.nsamples, self._reference_cube.nsamples)
+
+    def _set_ranking_params(self, ref_or_test, ranking_stat, rank_by,
             stat_label=None):
         """
         Sets the reference or test cube's ranking_stat and rank_by. See
@@ -458,7 +470,8 @@ class PHyperCubeGain:
         getattr(self, '_%s_cube' %(ref_or_test)).set_ranking_params(
             ranking_stat, rank_by, stat_label)
 
-    def set_reference_ranking_params(ranking_stat, rank_by, stat_label=None):
+    def set_reference_ranking_params(self, ranking_stat, rank_by,
+            stat_label=None):
         """
         Set's the reference cube's ranking params. See
         PHyperCube.set_ranking_params for details.
@@ -466,7 +479,7 @@ class PHyperCubeGain:
         self._set_ranking_params('reference', ranking_stat, rank_by,
             stat_label)
 
-    def set_test_ranking_params(ranking_stat, rank_by, stat_label=None):
+    def set_test_ranking_params(self, ranking_stat, rank_by, stat_label=None):
         """
         Set's the test cube's ranking params.
         """
@@ -490,19 +503,24 @@ class PHyperCubeGain:
             raise ValueError("test ranking params not set")
         ref_volume, ref_err, _ = self._reference_cube.get_volume(ref_threshold)
         test_volume, test_err, _ = self._test_cube.get_volume(test_threshold)
-        fractional_gain = test_volume / ref_volume
-        gain_err = fractional_gain * \
-            numpy.sqrt((test_err / test_volume)**2. + \
-                       (ref_err / ref_volume)**2.)
+        if ref_volume == 0.:
+            fractional_gain, gain_err = numpy.inf, 0.
+        else:
+            fractional_gain = test_volume / ref_volume
+            gain_err = fractional_gain * \
+                numpy.sqrt((test_err / test_volume)**2. + \
+                           (ref_err / ref_volume)**2.)
         return fractional_gain, gain_err
 
-    def create_html_page(self, out_dir, html_name, mapper=None,
-            threshold=None, mainplots_widths=1000):
+    def create_html_page(self, out_dir, html_name, test_threshold,
+        ref_threshold, mainplots_widths=1000, print_relative_error=False,
+        mapper=None):
         """
         Create's self html page. See _create_html_page for details.
         """
-        _create_html_page(self, out_dir, html_name, threshold=threshold,
-            mapper=mapper)
+        _create_html_page(self, out_dir, html_name, test_threshold,
+            ref_threshold=ref_threshold, mainplots_widths=mainplots_widths,
+            print_relative_error=print_relative_error, mapper=mapper)
         self.html_page = '%s/%s' %(out_dir, html_name)
 
 
@@ -633,10 +651,18 @@ def format_volume_text(V, err_plus, err_minus=None, include_units=True,
 
 
 def _create_html_page(phyper_cube, out_dir, html_name, threshold=None,
-        mainplots_widths=1000, print_relative_error=False, mapper=None):
+        ref_threshold=None, mainplots_widths=1000, print_relative_error=False,
+        mapper=None):
     """
     Creates an html page for the given PHyperCube.
     """
+    # check that the given thresholds match the phyper_cube type
+    write_gain = isinstance(phyper_cube, PHyperCubeGain)
+    if write_gain and ref_threshold is None:
+        raise ValueError("ref_threshold needed for PHyperCubeGain pages")
+    if threshold is None:
+        raise ValueError("must provide a threshold")
+
     #
     #   Open the html page and write the header
     #
@@ -671,12 +697,32 @@ def _create_html_page(phyper_cube, out_dir, html_name, threshold=None,
     print >> f, "<h2>"
     print >> f, "Total number of injections: %i<br />" %(
         phyper_cube.nsamples)
-    if threshold is not None and phyper_cube.nsamples > 1:
-        V, err, err_minus = phyper_cube.get_volume(threshold)
+    if phyper_cube.nsamples > 1:
+        if write_gain:
+            V, err, err_minus = phyper_cube.test_cube.get_volume(threshold)
+            stat_label = phyper_cube.test_cube.stat_label
+        else:
+            V, err, err_minus = phyper_cube.get_volume(threshold)
+            stat_label = phyper_cube.stat_label
         print >> f, "Sensitive volume at %s $= %s$:<br />&nbsp&nbsp%s<br />" %(
-            phyper_cube.stat_label, plot_utils.drop_trailing_zeros(threshold),
+            stat_label, plot_utils.drop_trailing_zeros(threshold),
             format_volume_text(V, err, err_minus=err_minus,
             use_relative_err=print_relative_error))
+        if write_gain:
+            V, err, err_minus = phyper_cube.reference_cube.get_volume(
+                ref_threshold)
+            print >> f, "Reference sensitive volume at " +\
+                "%s $= %s$:<br />&nbsp&nbsp%s<br />" %(
+                phyper_cube.reference_cube.stat_label,
+                plot_utils.drop_trailing_zeros(ref_threshold),
+                format_volume_text(V, err, err_minus=err_minus,
+                use_relative_err=print_relative_error))
+            G, err = phyper_cube.get_fractional_gain(ref_threshold,
+                threshold)
+            print >> f, "Relative gain:<br />&nbsp&nbsp%s<br />" %(
+                format_volume_text(G, err, include_units=False,
+                    use_relative_err=print_relative_error,
+                    use_scientific_notation=False))
             
     print >> f, "</h2>"
     print >> f, "<hr />"
@@ -703,8 +749,7 @@ def _create_html_page(phyper_cube, out_dir, html_name, threshold=None,
             print >> f, '<img src="%s" width="%i" />' %(figname,
                 mainplots_widths)
         else:
-            print >> f, "Click on a tile to go to the next layer for that " +\
-                "tile. <br />"
+            print >> f, "Click on a tile to go to the next layer. <br />"
             print >> f, mfig.create_image_map(html_page,
                 view_width=mainplots_widths)
     # put the subtiles plot
@@ -721,8 +766,7 @@ def _create_html_page(phyper_cube, out_dir, html_name, threshold=None,
             print >> f, '<img src="%s" width="%i" />' %(figname,
                 mainplots_widths)
         else:
-            print >> f, "Click on a tile to go to the next layer for that " +\
-                "tile. <br />"
+            print >> f, "Click on a tile to go to the next layer. <br />"
             print >> f, mfig.create_image_map(html_page,
                 view_width=mainplots_widths)
     # close out
@@ -1024,7 +1068,7 @@ class Layer:
                 raise ValueError("_cube_type is PHyperCubeGain, but " +
                     "ref_or_test not set to 'reference' or 'test' (got %s)" %(
                     str(ref_or_test)))
-            ref_or_test = '_%s' %(ref_or_test)
+            ref_or_test = '%s_' %(ref_or_test)
         if self._cube_type == PHyperCube:
             if ref_or_test != None:
                 raise ValueError("ref_or_test is not None, but _cube_type "+\
