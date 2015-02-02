@@ -59,15 +59,15 @@ else:
 
 print "getting results"
 filenames = plot_utils.parse_results_cache(opts.cache_file)
-inj_results, _ = plot_utils.get_injection_results(filenames,
-    weight_function=opts.weight_function, get_inj_map=False, verbose=True)
+results, _ = plot_utils.get_injection_results(filenames,
+    weight_function=opts.weight_function, verbose=True)
 apply_cut = {}
 for thiscut in opts.apply_cut:
     arg, vals = thiscut.split(':')
     apply_cut[arg] = map(float, vals.split(','))
 if apply_cut:
     print "applying cuts"
-    inj_results = plot_utils.slice_results(inj_results, apply_cut)
+    results = plot_utils.slice_results(results, apply_cut)
 if opts.plot_templates:
     print "getting templates"
     ii = 0
@@ -83,6 +83,14 @@ if opts.plot_templates:
 
 else:
     templates = []
+
+# group results by injection waveform approximant
+approximants = set([r.apprx for r in results])
+if len(approximants) > 1:
+    inj_results = dict([ [approx, [r for r in results if r.apprx == approx]]
+        for approx in approximants])
+else:
+    inj_results = {approximants.pop(): results}
 
 print "plotting..."
 for apprx, results in inj_results.items():
