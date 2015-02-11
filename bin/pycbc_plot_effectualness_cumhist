@@ -1,12 +1,13 @@
 #! /usr/bin/env python
 
-import os
+import os,sys
 import sqlite3
 from optparse import OptionParser
 import math
 import numpy
 from pycbc import plot
 from pycbc.plot import plot_utils
+from pycbc.plot import efficiency
 
 __prog__ = 'pycbc_plot_effectualness_cumhist'
 __author__ = 'Collin Capano <collin.capano@ligo.org>'
@@ -17,6 +18,7 @@ parser = OptionParser()
 parser.add_option('-c', '--cache-file', help = 'cache file containing result databases')
 parser.add_option('-W', '--weight-function', default='uniform', help="Get effectualness for the given weight function. Default is 'uniform'. The weight name provided must exist in the description column of the coinc_definer table.")
 parser.add_option('-P', '--apply-cut', action = 'append', default = [], metavar = 'arg:min,max', help='Only include injections that have the given argument in the given range. If specified multiple times, only injections passing all specified cuts will be plotted. The following parameters can be specified: %s' %(plot_utils.Result().plottable_arguments))
+parser.add_option('', '--layer-config-file', help='If provided, a plot will be created for each tile in the given config file. All of the plot names will be written out to a cache file.')
 parser.add_option('--log-y', action='store_true', default=False, help='Make y-axis log10.')
 parser.add_option('-X', '--x-lims', metavar = 'xmin,xmax', help = 'x limits to use')
 parser.add_option('-Y', '--y-lims', metavar = 'ymin,ymax', help = 'y limits to use')
@@ -46,6 +48,14 @@ if opts.user_tag is not None:
 else:
     tag = ''
 
+# load layers if desired
+if opts.layer_config_file is not None:
+    layers = efficiency.create_layers_from_config(opts.layer_config_file)
+    pcubes = efficiency.get_all_cubes_in_layers(top_layer)
+else:
+    # just create an empty phyper cube; this will cause all of the data
+    # to be plotted
+    pcubes = [efficiency.PHyperCube()]
 
 print "getting results"
 filenames = plot_utils.parse_results_cache(opts.cache_file)
@@ -70,18 +80,40 @@ else:
 print "plotting..."
 for apprx, results in inj_results.items():
     print "\t%s" % apprx
-    if opts.plot_bar:
-        fig, plot_data = plot.plot_effectualness_barcumhist(results,
-            opts.tmplt_label, opts.inj_label,
-            target_mismatch=opts.target_mismatch, nbins=opts.nbins,
-            xmin=xmin, xmax=xmax, ymin=ymin,
-            ymax=ymax, logy=opts.log_y, dpi=opts.dpi)
-    else:
-        fig, plot_data = plot.plot_effectualness_cumhist(results,
-            opts.tmplt_label, opts.inj_label,
-            target_mismatch=opts.target_mismatch,
-            xmin=xmin, xmax=xmax, ymin=ymin,
-            ymax=ymax, logy=opts.log_y, dpi=opts.dpi)
+    for ii,pcube in enumerate(pcubes):
+        print "%i / %i\r" %(ii+1, len(pcubes)),
+        sys.stdout.flush()
+        # slice these results
+        these_results = plot_utils.slice_results(results, pcube.bounds)
+        if opts.plot_bar:
+            fig, plot_data = plot.plot_effectualness_barcumhist(these_results,
+                opts.tmplt_label, opts.inj_label,
+                target_mismatch=opts.target_mismatch, nbins=opts.nbins,
+                xmin=xmin, xmax=xmax, ymin=ymin,
+                ymax=ymax, logy=opts.log_y, dpi=opts.dpi)
+        else:
+            fig, plot_data = plot.plot_effectualness_cumhist(these_results,
+                opts.tmplt_label, opts.inj_label,
+                target_mismatch=opts.target_mismatch,
+                xmin=xmin, xmax=xmax, ymin=ymin,
+                ymax=ymax, logy=opts.log_y, dpi=opts.dpi)
 
-    fig.savefig('%s/plot_effectualness_cumhist%s-%s.%s' %(opts.output_dir, tag,
-        apprx, opts.plot_type), dpi=opts.dpi, bbox_inches='tight')
+        if pcube.id_in_layer is not None:
+            level_id, idx_id = pcube.id_in_layer
+            if idx_id == -1:
+                idx_tag = '-%i' %(level_id)
+            else:
+                idx_tag = '-%i-%i' %(level_id, idx_id)
+        else:
+            idx_tag = ''
+        figname = '%s/plot_effectualness_cumhist%s_%s%s.%s' %(opts.output_dir,
+            tag, apprx, idx_tag, opts.plot_type)
+        fig.savefig(figname, dpi=opts.dpi, bbox_inches='tight')
+        # add to the cube's list of additional plots
+        pcube.additional_plots.append(figname)
+print ""
+
+# save the file cache if there is more than one entry
+if len(pcubes) > 1:
+    cachename = '%s/plot_effectualness_cumhist%s.cache' %(opts.output_dir, tag)
+    efficiency.write_plot_cache(cachename, layers[0], opts.layer_config_file)

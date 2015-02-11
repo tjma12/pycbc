@@ -3,6 +3,7 @@
 import os
 import numpy
 import operator
+import hashlib
 import copy
 import ConfigParser
 from glue import segments
@@ -67,6 +68,11 @@ class PHyperCube:
         self.subtiles_plot = None
         self.additional_plots = []
         self.html_page = None
+        # for easy identification of self within a collection of cubes in a
+        # layer; this is useful for quickly picking out what additional plots
+        # are associated with this cube in a plot_cache file; see Layer for
+        # more details
+        self.id_in_layer = None
 
     def set_bound(self, param, lower, upper):
         self._bounds[param] = segments.segment(lower, upper)
@@ -401,6 +407,11 @@ class PHyperCubeGain:
         self.subtiles_plot = None
         self.additional_plots = []
         self.html_page = None
+        # for easy identification of self within a collection of cubes in a
+        # layer; this is useful for quickly picking out what additional plots
+        # are associated with this cube in a plot_cache file; see Layer for
+        # more details
+        self.id_in_layer = None
 
     @property
     def reference_cube(self):
@@ -513,13 +524,16 @@ class PHyperCubeGain:
         return fractional_gain, gain_err
 
     def create_html_page(self, out_dir, html_name, test_threshold,
-        ref_threshold, mainplots_widths=1000, print_relative_error=False,
+        ref_threshold, test_label='', ref_label='', mainplots_widths=1000,
+        print_relative_error=False,
         mapper=None):
         """
         Create's self html page. See _create_html_page for details.
         """
-        _create_html_page(self, out_dir, html_name, test_threshold,
-            ref_threshold=ref_threshold, mainplots_widths=mainplots_widths,
+        _create_gain_html_page(self, out_dir, html_name, test_threshold,
+            ref_threshold=ref_threshold,
+            test_label=test_label, ref_label=ref_label,
+            mainplots_widths=mainplots_widths,
             print_relative_error=print_relative_error, mapper=mapper)
         self.html_page = '%s/%s' %(out_dir, html_name)
 
@@ -725,6 +739,141 @@ def _create_html_page(phyper_cube, out_dir, html_name, threshold=None,
                     use_scientific_notation=False))
             
     print >> f, "</h2>"
+    # put the V vs stat plot
+    if phyper_cube.volumes_vs_stat_plot is not None:
+        print >> f, "<hr />"
+        mfig = phyper_cube.volumes_vs_stat_plot
+        figname = os.path.relpath(os.path.abspath(mfig.saved_filename),
+                os.path.dirname(os.path.abspath(html_page)))
+        print >> f, '<img src="%s" width="%i" />' %(figname,
+            mainplots_widths)
+    # put the tiles plot
+    if phyper_cube.tiles_plot is not None:
+        print >> f, "<hr />"
+        # if no clickable elements, just add the plot
+        mfig = phyper_cube.tiles_plot
+        # ensure links are set appropriately
+        [setattr(clickable, 'link', clickable.data.html_page) \
+            for clickable in mfig.clickable_elements]
+        if mfig.clickable_elements == [] or not \
+                all([clickable.link is not None \
+                for clickable in mfig.clickable_elements]):
+            figname = os.path.relpath(os.path.abspath(mfig.saved_filename),
+                os.path.dirname(os.path.abspath(html_page)))
+            print >> f, '<img src="%s" width="%i" />' %(figname,
+                mainplots_widths)
+        else:
+            print >> f, "Click on a tile to go to the next layer. <br />"
+            print >> f, mfig.create_image_map(html_page,
+                view_width=mainplots_widths)
+    # put the subtiles plot
+    if phyper_cube.subtiles_plot is not None:
+        print >> f, "<hr />"
+        mfig = phyper_cube.subtiles_plot
+        [setattr(clickable, 'link', clickable.data.html_page) \
+            for clickable in mfig.clickable_elements]
+        if mfig.clickable_elements == [] or not \
+                all([clickable.link is not None \
+                for clickable in mfig.clickable_elements]):
+            figname = os.path.relpath(os.path.abspath(mfig.saved_filename),
+                os.path.dirname(os.path.abspath(html_page)))
+            print >> f, '<img src="%s" width="%i" />' %(figname,
+                mainplots_widths)
+        else:
+            print >> f, "Click on a tile to go to the next layer. <br />"
+            print >> f, mfig.create_image_map(html_page,
+                view_width=mainplots_widths)
+    # if there are additional plots, add them
+    if phyper_cube.additional_plots != []:
+        print >> f, "<hr />"
+        print >> f, "<h3>Additional plots</h3>"
+        for figname in phyper_cube.additional_plots:
+            figname = os.path.relpath(os.path.abspath(figname),
+                os.path.dirname(os.path.abspath(html_page)))
+            print >> f, '<a href="%s"><img src="%s" width="%i" /></a>' %(
+                figname, figname, int(mainplots_widths/2))
+    # close out
+    print >> f, '</body>\n</html>'
+    f.close()
+
+
+def _create_gain_html_page(phyper_cube, out_dir, html_name, threshold=None,
+        ref_threshold=None, test_label='', ref_label='',
+        mainplots_widths=1000, print_relative_error=False,
+        mapper=None):
+    """
+    Creates an html page for the given PHyperCubeGain.
+    """
+    # check that the given thresholds match the phyper_cube type
+    write_gain = True #isinstance(phyper_cube, PHyperCubeGain)
+    if write_gain and ref_threshold is None:
+        raise ValueError("ref_threshold needed for PHyperCubeGain pages")
+    if threshold is None:
+        raise ValueError("must provide a threshold")
+
+    if test_label != '':
+        test_label = ' ($%s$)' %(test_label)
+    if ref_label != '':
+        ref_label = ' ($%s$)' %(ref_label)
+
+    #
+    #   Open the html page and write the header
+    #
+    html_page = '%s/%s' % (out_dir, html_name)
+    f = open(html_page, 'w')
+    print >> f, "<!DOCTYPE html>\n<html>"
+    # we'll use MathJax to be able to display latex math
+    print >> f, "<head>"
+    print >> f, mathjax_html_header()
+    if mapper is not None:
+        print >> f, mapper_header(mapper)
+    print >> f, "</head>"
+    #
+    # Now the body
+    #
+    print >> f, "<body>"
+    # we'll put the bounds in the heading
+    print >> f, "<h1>"
+    for (param, (lower, upper)) in sorted(phyper_cube.bounds.items()):
+        # if the param is a Parameter instance with a label, we can
+        # just get the label to use from it; otherwise, we'll just use
+        # the parameter name
+        try:
+            plbl = param.label
+        except AttributeError:
+            plbl = param
+        print >> f, r"%s $\in [%s, %s)$<br />" %(plbl,
+            plot_utils.drop_trailing_zeros(lower),
+            plot_utils.drop_trailing_zeros(upper))
+    print >> f, "</h1>"
+    # print some basic info about this cube
+    print >> f, "<h2>"
+    print >> f, "Total number of injections: %i<br />" %(
+        phyper_cube.nsamples)
+    if phyper_cube.nsamples > 1:
+        V, err, err_minus = phyper_cube.test_cube.get_volume(threshold)
+        stat_label = phyper_cube.test_cube.stat_label
+        print >> f, "Test%s sensitive volume at " %(test_label) +\
+            "%s $= %s$:<br />&nbsp&nbsp%s<br />" %(
+            stat_label, plot_utils.drop_trailing_zeros(threshold),
+            format_volume_text(V, err, err_minus=err_minus,
+            use_relative_err=print_relative_error))
+        V, err, err_minus = phyper_cube.reference_cube.get_volume(
+            ref_threshold)
+        print >> f, "Reference%s sensitive volume at " %(ref_label) +\
+            "%s $= %s$:<br />&nbsp&nbsp%s<br />" %(
+            phyper_cube.reference_cube.stat_label,
+            plot_utils.drop_trailing_zeros(ref_threshold),
+            format_volume_text(V, err, err_minus=err_minus,
+            use_relative_err=print_relative_error))
+        G, err = phyper_cube.get_fractional_gain(ref_threshold,
+            threshold)
+        print >> f, "Relative gain:<br />&nbsp&nbsp%s<br />" %(
+            format_volume_text(G, err, include_units=False,
+                use_relative_err=print_relative_error,
+                use_scientific_notation=False))
+            
+    print >> f, "</h2>"
     print >> f, "<hr />"
     # put the V vs stat plot
     if phyper_cube.volumes_vs_stat_plot is not None:
@@ -769,6 +918,22 @@ def _create_html_page(phyper_cube, out_dir, html_name, threshold=None,
             print >> f, "Click on a tile to go to the next layer. <br />"
             print >> f, mfig.create_image_map(html_page,
                 view_width=mainplots_widths)
+    # if the reference or test cubes have volume plots, add them
+    if phyper_cube.test_cube.tiles_plot is not None:
+        print >> f, "<hr /><h3>Test%s volumes</h3>" %(test_label)
+        mfig = phyper_cube.test_cube.tiles_plot
+        figname = os.path.relpath(os.path.abspath(mfig.saved_filename),
+            os.path.dirname(os.path.abspath(html_page)))
+        print >> f, '<img src="%s" width="%i" /><br />' %(
+            figname, mainplots_widths)
+    if phyper_cube.reference_cube.tiles_plot is not None:
+        print >> f, "<hr /><h3>Reference%s volumes</h3>" %(ref_label)
+        mfig = phyper_cube.reference_cube.tiles_plot
+        figname = os.path.relpath(os.path.abspath(mfig.saved_filename),
+            os.path.dirname(os.path.abspath(html_page)))
+        print >> f, '<img src="%s" width="%i" /><br />' %(
+            figname, mainplots_widths)
+
     # close out
     print >> f, '</body>\n</html>'
     f.close()
@@ -996,6 +1161,20 @@ class Layer:
         return [child for parent in self._parents \
             for child in parent.children]
 
+    def set_cube_layer_ids(self):
+        """
+        Assigns a unique id to each child phyper cube in the layer. The id is
+        (level, idx), where level is the level number of the layer and idx is
+        the index of the tile in the layer.all_children list. If self.level is
+        0, then the (single) parent cube's id will be set to (0,-1).
+        Otherwise, parent cube ids are not set, as they are the children of
+        self's super_layer.
+        """
+        [setattr(child, 'id_in_layer', (self.level, ii)) for ii,child in \
+            enumerate(self.all_children)]
+        if self.level == 0:
+            self.parents[0].id_in_layer = (0, -1)
+
     def set_cube_data(self, data, ref_or_test=None):
         """
         Bins the given data into self's parents of phyper cubes. If self's
@@ -1079,7 +1258,6 @@ class Layer:
             rank_by, stat_label) for parent in self.parents]
         [getattr(child, 'set_%sranking_params' %(ref_or_test))(ranking_stat,
             rank_by, stat_label) for child in self.all_children]
-
 
 
 
@@ -1173,6 +1351,7 @@ def create_layers_from_config(config_file, cube_type='single'):
         if level > 0:
             this_layer.set_super_layer(layers[level-1])
         this_layer.create_cubes()
+        this_layer.set_cube_layer_ids()
         # add to the list of layers
         layers.append(this_layer)
 
@@ -1181,3 +1360,87 @@ def create_layers_from_config(config_file, cube_type='single'):
         this_layer.set_sub_layer(layers[this_layer.level+1])
 
     return layers
+
+
+def get_all_cubes_in_layers(top_layer):
+    """
+    Returns a list of all of the phyper cubes in the hierarchy layer.
+    """
+    if top_layer.level != 0:
+        raise ValueError("given top_layer does not have level 0")
+    pcubes = [top_layer.parents[0]] + top_layer.all_children
+    this_layer = top_layer.sub_layer
+    while this_layer is not None:
+        pcubes += this_layer.all_children
+        this_layer = this_layer.sub_layer
+    return pcubes
+
+
+def get_file_checksum(filename):
+    """
+    Gets the SHA 256 checksum of the given file.
+    """
+    return hashlib.sha256(open(filename, 'rb').read()).digest()
+
+
+def get_layers_checksum(top_layer):
+    """
+    Returns a checksum describing the layer hierarchy. This is obtained
+    by creating a string out of the x-arg, x-min, x-max, x-nbins, x-distr,
+    and the same for y, from every layer in the layer hierarchy.
+    The order of the parameter cubes is whatever is returned by
+    get_all_cubes_in_layers.
+    """
+    this_layer = top_layer
+    description = []
+    while this_layer is not None:
+        x_min, x_max = this_layer.x_lims
+        y_min, y_max = this_layer.y_lims
+        description.extend(map(str, [this_layer.x_param, x_min, x_max,
+            this_layer.x_nbins, this_layer.x_distr,
+            this_layer.y_param, y_min, y_max, this_layer.y_nbins]))
+        this_layer = this_layer.sub_layer
+    return hashlib.sha256(','.join(description)).digest()
+
+
+def write_plot_cache(cachename, top_layer, layer_config_file):
+    """
+    Creates a cache file of plots given the top layer of a layer hierarchy.
+    The structure of the cache file is phyper_cube.id_in_layer plot_filename.
+    The plot filenames are retrieved from each phyper_cube's list of
+    additional_plots.  At the top of the cache file the location and a
+    checksum of the layer hierarchy that was created by the layer_config_file
+    is written. This is done so that later programs can check that the layers
+    are the same. 
+    """
+    f = open(cachename, 'w')
+    # we'll write write an hash checksum of the config file at the top of the
+    # cache file, along with the name of the cache file, so later programs
+    # can check
+    print >> f, "#from: %s" %(os.path.abspath(layer_config_file))
+    print >> f, "#checksum: %s" %(get_layers_checksum(top_layer))
+    # now print the filenames along with the index
+    for pcube in get_all_cubes_in_layers(top_layer):
+        level_num, child_idx = pcube.id_in_layer
+        for fname in pcube.additional_plots:
+            print >> f, "%i %i %s" %(level_num, child_idx,
+                os.path.abspath(fname))
+    f.close()
+
+
+def load_plot_cache(cachename):
+    """
+    Loads the given plot cache. A dictionary is returned indexed by the
+    parameter cubes' id_in_layer.
+    """
+    f = open(cachename, 'r')
+    filepath = f.readline().split(' ')[1].rstrip('\n')
+    checksum = f.readline().split(' ')[1].rstrip('\n')
+    plot_files = {}
+    for line in f:
+        level_num, child_idx, fname = line.split(' ')
+        fname = fname.rstrip('\n')
+        dictkey = (int(level_num), int(child_idx))
+        plot_files.setdefault(dictkey, [])
+        plot_files[dictkey].append(fname)
+    return filepath, checksum, plot_files

@@ -61,11 +61,6 @@ def get_log10_ticks(ticks):
     return numpy.log10(new_ticks), ticklabels
 
 
-def empty_plot(ax):
-    ax.set_axis_bgcolor('w')
-    return ax.annotate("Nothing to plot", (0.5, 0.5))
-
-
 def _plot_tiles(ax, zvals, plus_errs, minus_errs, phyper_cubes,
         xarg, xlabel, yarg, ylabel,
         colormap='hot', vmax=None, vmin=None, add_colorbar=False,
@@ -297,7 +292,7 @@ def plot_volume_vs_stat_on_axes(ax, phyper_cube, min_stat, max_stat,
     Creats a plot of sensitive volume versus ranking stat on the given axes.
     """
     if phyper_cube.nsamples < 2:
-        return empty_plot(ax), None, None
+        return plot_utils.empty_plot(ax), None, None
     if logx:
         thresholds = numpy.logspace(numpy.log10(min_stat),
             numpy.log10(max_stat), nbins)
@@ -600,7 +595,7 @@ def plot_volumes(phyper_cubes, xarg, xlabel, yarg, ylabel, threshold,
 
     # if there is nothing to plot, just create an empty plot and return
     if len(phyper_cubes) == 0:
-        empty_plot(ax)
+        plot_utils.empty_plot(ax)
         return mfig
 
     # volumes is a 2D array; the first column are the volumes, the
@@ -675,7 +670,7 @@ def plot_subvolumes(phyper_cubes, xarg, xlabel, yarg, ylabel,
     if phyper_cubes == []:
         mfig = plot_utils.figure(dpi=dpi)
         ax = mfig.add_subplot(111)
-        empty_plot(ax)
+        plot_utils.empty_plot(ax)
         return mfig
 
     # to ensure we get properly normalized colors, find the largest
@@ -814,7 +809,7 @@ def plot_gains(phyper_cubes, xarg, xlabel, yarg, ylabel, test_threshold,
 
     # if there is nothing to plot, just create an empty plot and return
     if len(phyper_cubes) == 0:
-        empty_plot(ax)
+        plot_utils.empty_plot(ax)
         return mfig
 
     # gains is a 2D array; the first column are the gains, the
@@ -865,7 +860,7 @@ def plot_subgains(phyper_cubes, xarg, xlabel, yarg, ylabel,
     if phyper_cubes == []:
         mfig = plot_utils.figure(dpi=dpi)
         ax = mfig.add_subplot(111)
-        empty_plot(ax)
+        plot_utils.empty_plot(ax)
         return mfig
 
     # to ensure we get properly normalized colors, find the largest
@@ -1092,7 +1087,8 @@ def plot_subvolumes_from_layer(layer, threshold, user_tag='', min_ninj=1,
 def plot_gains_from_layer(layer, test_threshold, ref_threshold, user_tag='',
         min_ninj=1, test_label='', ref_label='',
         colormap='Greens', maxgain=None, mingain=None, fontsize=8,
-        print_relative_err=False, logz=False, dpi=300, verbose=False):
+        print_relative_err=False, logz=False, include_volume_plots=False,
+        minvol=None, maxvol=None, dpi=300, verbose=False):
     """
     Wrapper around plot_gains that creates a gain tile plot for every
     parent in the given layer. X and Y arguments/labels of the tile
@@ -1136,6 +1132,50 @@ def plot_gains_from_layer(layer, test_threshold, ref_threshold, user_tag='',
         mfig.savefig('%s%s/%s' %(layer.root_dir, layer.web_dir, plotname),
             dpi=dpi)
         parent.tiles_plot = mfig
+
+        # if volume plots are desired, create them
+        if include_volume_plots:
+            # the test volumes
+            mfig = plot_volumes([child.test_cube for child in parent.children],
+                layer.x_param, layer.x_param.label,
+                layer.y_param, layer.y_param.label, test_threshold,
+                min_ninj=min_ninj,
+                tmplt_label=test_label, inj_label='', annotate=True,
+                add_colorbar=False, colormap='hot', maxvol=maxvol,
+                minvol=minvol, fontsize=fontsize,
+                print_relative_err=print_relative_err,
+                logx=layer.x_distr == 'log10', logy=layer.y_distr == 'log10',
+                logz=True, add_clickables=False,
+                xmin=layer.plot_x_min, xmax=layer.plot_x_max,
+                ymin=layer.plot_y_min, ymax=layer.plot_y_max)
+            # save the figure
+            plotname = fnametmplt.replace('plot_gains', 'test_volumes') %(
+                layer.images_dir, user_tag, layer.level, ii) 
+            mfig.savefig('%s%s/%s' %(layer.root_dir, layer.web_dir, plotname),
+                dpi=dpi)
+            parent.test_cube.tiles_plot = mfig
+
+            # the reference volumes
+            mfig = plot_volumes(
+                [child.reference_cube for child in parent.children],
+                layer.x_param, layer.x_param.label,
+                layer.y_param, layer.y_param.label, ref_threshold,
+                min_ninj=min_ninj,
+                tmplt_label=ref_label, inj_label='', annotate=True,
+                add_colorbar=False, colormap='hot', maxvol=maxvol,
+                minvol=minvol, fontsize=fontsize,
+                print_relative_err=print_relative_err,
+                logx=layer.x_distr == 'log10', logy=layer.y_distr == 'log10',
+                logz=True, add_clickables=False,
+                xmin=layer.plot_x_min, xmax=layer.plot_x_max,
+                ymin=layer.plot_y_min, ymax=layer.plot_y_max)
+            # save the figure
+            plotname = fnametmplt.replace('plot_gains', 'ref_volumes') %(
+                layer.images_dir, user_tag, layer.level, ii) 
+            mfig.savefig('%s%s/%s' %(layer.root_dir, layer.web_dir, plotname),
+                dpi=dpi)
+            parent.reference_cube.tiles_plot = mfig
+
     if verbose:
         print >> sys.stdout, ""
 

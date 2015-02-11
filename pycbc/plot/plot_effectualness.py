@@ -37,6 +37,12 @@ def plot_effectualness(results, xarg, xlabel, yarg, ylabel,
     xvals = numpy.array([plot_utils.get_arg(res, xarg) for res in results])
     yvals = numpy.array([plot_utils.get_arg(res, yarg) for res in results])
     zvals = numpy.array([res.effectualness for res in results])
+
+    # if nothing to plot, just create an empty plot and return
+    if xvals.size == 0:
+        plot_utils.empty_plot(ax, "No points to plot \mathcal{E}")
+        return fig, None, None
+
     sort_idx = zvals.argsort()[::-1]
     xvals = xvals[sort_idx]
     yvals = yvals[sort_idx]

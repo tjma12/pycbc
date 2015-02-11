@@ -24,7 +24,7 @@ parser.add_option('-r', '--stat-range', metavar='MIN_STAT,MAX_STAT[:log]', defau
 parser.add_option('-N', '--min-ninj', type='int', default=2, help='Minimum number of injections that must exist in a block in in order to calculate volume. If a block has less then this, it will be skipped. Default is 2.')
 parser.add_option('', '--print-relative-error', action='store_true', default=False, help='Turn on to print relative errors instead of absolute errors.')
 parser.add_option('', '--use-distance-bins', action='store_true', default=False, help="If turned on, will use distance bins to compute sensitive volumes, rather than the standard Monte Carlo method of using the average of the integrand. Generally, this will yield larger variance, so turn this on with caution.")
-parser.add_option('-p', '--subplots-cache', help='Load subplots for each tile from the given cache file.')
+parser.add_option('-p', '--additional-plots-cache', metavar='FILE1.cache[,FILE2.cache,...]', help='Load additional plots for each cube from the given cache file(s). To specify multiple cache files, comma separate each file name. All cache files must have used the same layer-configuration-file.')
 parser.add_option('-o', '--output-dir', help='Directory to save results to.')
 parser.add_option('-u', '--user-tag', default='', help='Add a user tag to all output files.')
 parser.add_option('', '--colormap', default='hot', help='What color map to use for fractional gain plots. Default is hot.')
@@ -82,7 +82,7 @@ layers = efficiency.create_layers_from_config(opts.layer_config_file,
 # create the directory structure: layer0 goes in the top level folder.
 # Each sub-layer are placed in sub-folders. Every folder has an images
 # directory where plots are stored.
-imgdir = 'Images'
+imgdir = 'images'
 scriptdir = 'scripts/'
 this_folder = '/'
 for ii,layer in enumerate(layers):
@@ -112,6 +112,46 @@ for ii,layer in enumerate(layers):
     # update this_folder for the next lower layer
     this_folder = '%slayer%i/'%(this_folder, ii+1) 
     
+# if additional plots cache are specified, load them
+if opts.additional_plots_cache is not None:
+    print "creating symbolic links to additional plots..."
+    plot_cache = {}
+    # get this layer config file's checksum for comparison
+    layers_checksum = efficiency.get_layers_checksum(layers[0])
+    for cache in opts.additional_plots_cache.split(','):
+        _, this_checksum, this_cache = efficiency.load_plot_cache(cache) 
+        if this_checksum != layers_checksum:
+            raise ValueError("the layer hierarchy in " +\
+                "plot cache %s does not have the same checksum " %(cache) +\
+                "as the layer hierarchy from the given layer-config-file")
+        for tile_layer_id, filelist in this_cache.items():
+            plot_cache.setdefault(tile_layer_id, [])
+            plot_cache[tile_layer_id] += filelist
+    this_layer = layers[0]
+    while this_layer is not None:
+        # if the bottom layer, also create links for the additional plots
+        # to the children
+        if this_layer.sub_layer is None:
+            pcubes = this_layer.parents + this_layer.all_children
+        else:
+            pcubes = this_layer.parents
+        for pcube in pcubes:
+            add_plots = plot_cache[pcube.id_in_layer]
+            for plot in add_plots:
+                # create a symbolic link to the plot in the layer's image dir
+                figname = '%s%s%s/%s' %(this_layer.root_dir,
+                    this_layer.web_dir, this_layer.images_dir,
+                    os.path.basename(plot))
+                # ensure that we can create a symlink
+                try:
+                    os.remove(figname)
+                except OSError:
+                    pass
+                os.symlink(plot, figname)
+                # add the figname to the pcube's additional plots
+                pcube.additional_plots.append(figname)
+        this_layer = this_layer.sub_layer
+
 
 print "getting results"
 filenames = plot_utils.parse_results_cache(opts.cache_file)

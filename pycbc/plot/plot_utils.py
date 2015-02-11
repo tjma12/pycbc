@@ -58,6 +58,14 @@ def ColorBarLog10Formatter(y, pos):
     """
     return "$10^{%.1f}$" % y
 
+def empty_plot(ax, message="Nothing to plot"):
+    """
+    Creates an empty plot on the given axis.
+    """
+    # ensure the axis background is white, so the text can be read
+    ax.set_axis_bgcolor('w')
+    return ax.annotate(message, (0.5, 0.5))
+
 
 #############################################
 #
@@ -260,7 +268,7 @@ def get_injection_results(filenames, weight_function='uniform',
                 idx += 1
                 thisRes.apprx = apprx
                 # ensure that m1 is always > m2
-                if False:#m2 > m1:
+                if m2 > m1:
                     thisRes.m1 = m2
                     thisRes.m2 = m1
                     thisRes.s1z = s2z
