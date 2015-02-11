@@ -53,14 +53,21 @@ parser.add_option("", "--taper", help = "For TD approximants, set whether or not
 parser.add_option("", "--apply-weights", metavar="WEIGHT1[,WEIGHT2,...]", default="uniform", help="Apply a weight to a template when maximizing the overlap of an injection over the bank. Options are %s. Default is uniform. To specify more than one weight, separate the weights by commas. A separate maximization will be performed for each weight specified. The name of the weight associated with each maximization is stored in the description column of the coinc_definer table." %(', '.join(overlap_utils.weight_functions.keys())))
 parser.add_option('', '--simple-window', metavar='PARAM:LOWER[:UPPER]', help="Only filter templates that lie within the given fractional range of the given parameter of an injection. LOWER must be < 1. If an UPPER is not specified, the LOWER fractional range will be used. For example, if set to mchirp:0.2, only templates that have an mchirp within +/-0.2 of an injection's mchirp will be filtered with that injection. If set to mchirp:0.2:0.5, templates with an mchirp [- 0.2, +0.5] * the injection's mchirp will be filtered.")
 parser.add_option('', '--match-window-db', help = 'Use the match windows specified in the given database to reduce the number of overlaps computed. This can provide a more fine-tuned match window than that provided by use-simple-window. This cannot be used at the same time as use-simple-window.')
-parser.add_option('', '--save-all-overlaps', action = 'store_true', default = False, help = 'Do not delete the all_overlaps table from the output database before exiting. This table contains the fitting factors for all the injections and templates that were filtered.')
+parser.add_option('', '--save-all-overlaps', action = 'store_true', default = False, help = 'Do not delete the all_overlaps table from the output database before exiting. This table contains the fitting factors for all the injections and templates that were filtered. WARNING: This can cause the output databases to be quite large, which can cause issues if many jobs are running at once in a networked environment. It is recommended that this option only be used when running jobs one at a time, on a head node.')
 parser.add_option('-R', '--replace', action = 'store_true', default = False, help = 'If the output database already exists, overwrite it. Default action is not to overwrite, in which case only injections that do not have overlap values calculated in the database will be analyzed.')
 parser.add_option('-T', '--checkpoint-dt', type = 'float', default = numpy.inf, help = 'Number of minutes between checkpoints. Default is infinity, meaning no checkpointing.')
+parser.add_option('', '--checkpoint-window', type='float', default=0., help='To prevent all jobs writing to disk at the same time, this setting will randomize the times between checkpoints to checkpoint-dt + w, where w is chosen uniformly in the range [-checkpoint-window, checkpoint-window]. Must be less than checkpoint-dt. Default is 0.') 
 parser.add_option('-v', '--verbose', action = 'store_true', help = 'Be verbose.')
 
 opts, filenames = parser.parse_args()
 
 # check options
+# set checkpoint window
+if opts.checkpoint_dt < opts.checkpoint_window:
+    raise ValueError("checkpoint-dt must be greater than checkpoint-window")
+checkpoint_dt = opts.checkpoint_dt + \
+    numpy.random.uniform(-opts.checkpoint_window, opts.checkpoint_window)
+
 ifo = opts.ifo
 if opts.ifo is not None:
     ifo = ifo.upper()
@@ -623,10 +630,17 @@ for fnum, infile in enumerate(filenames):
 
             # check time and update checkpoints if needed
             now = time.time()
-            if (now - last_time)/60. > opts.checkpoint_dt:
+            if (now - last_time)/60. > checkpoint_dt:
                 if opts.verbose:
                     print >> sys.stdout, "\ncheckpointing..."
                     sys.stdout.flush()
+                # to reduce the size of files being transferred, we'll select
+                # the best match for each injection so far and delete the
+                # other entries in the all results table
+                if not opts.save_all_overlaps:
+                    overlap_utils.prune_all_results(connection, injections,
+                        vacuum=True, verbose=opts.verbose)
+
                 # Note: never backing up archive
                 archive = overlap_utils.checkpoint(connection, opts.output_dir,
                     archive, now, str(inj.simulation_id), ii,
@@ -643,6 +657,9 @@ for fnum, infile in enumerate(filenames):
                     dbtables.set_temp_store_directory(connection,
                         opts.tmp_space, verbose = False)
                 last_time = now
+                # randomize the next checkpoint time
+                checkpoint_dt = opts.checkpoint_dt + numpy.random.uniform(
+                    -opts.checkpoint_window, opts.checkpoint_window)
 
     #
     #   Best Match Calculations
@@ -658,6 +675,9 @@ for fnum, infile in enumerate(filenames):
         if opts.verbose:
             print >> sys.stdout, "\ncheckpointing..."
             sys.stdout.flush()
+        if not opts.save_all_overlaps:
+            overlap_utils.prune_all_results(connection, injections,
+                vacuum=True, verbose=opts.verbose)
         archive = overlap_utils.checkpoint(connection, opts.output_dir,
             archive, now, str(injections.as_list[-1].simulation_id),
             len(injections.as_list)-1, str(templates.as_list[-1].tmplt_id),
@@ -703,10 +723,9 @@ for fnum, infile in enumerate(filenames):
     
 
         for weight_func in weight_functions:
-            # get the best match for this injection
-            result = connection.cursor().execute(best_match_query,
-                (str(inj.simulation_id), weight_func)).fetchone()
-            if result is None:
+            bestMatch = overlap_utils.get_best_match(connection,
+                str(inj.simulation_id), weight_func=weight_func)
+            if bestMatch is None:
                 raise ValueError("Injection %s " %(inj.simulation_id) +\
                     "was not filtered with any template. This happens when " +\
                     "the windowing used is too small. Either remove the " +\
@@ -714,22 +733,15 @@ for fnum, infile in enumerate(filenames):
                     "and re-run (make sure --replace is not on) or use a " +\
                     "larger window and re-run the entire job (with either " +\
                     "--replace on, or with a different user-tag).")
-            simid, tmpltid, eff, wt, dt, dt_ns, seg_length, sample_rate = \
-                result
-
-            bestMatch = overlap_utils.OverlapResult(templates[tmpltid],
-                injections[simid])
-            bestMatch.effectualness = eff
-            bestMatch.weight = wt
-            bestMatch.weight_function = weight_func
-            bestMatch.time_offset = dt
-            bestMatch.time_offset_ns = dt_ns
-            bestMatch.segment_length = seg_length
-            bestMatch.sample_rate = sample_rate
+            # the bestMatch returned by get_best_match sets the template and
+            # injection to their ids; replace with the template and injection
+            # instances
+            bestMatch.template = templates[bestMatch.template]
+            bestMatch.injection = inj
+            # fill in the rest of the data
             bestMatch.overlap_f_min = ofmin 
             bestMatch.waveform_f_min = wfmin
             bestMatch.tmplt_approximant = opts.approximant 
-          
             overlap_utils.write_result_to_database(connection, bestMatch,
                 weight_func, this_process)
 

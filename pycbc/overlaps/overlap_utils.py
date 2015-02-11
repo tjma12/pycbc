@@ -1085,6 +1085,119 @@ def get_injection_template_map(connection):
         connection.cursor().execute(sqlquery)])
         
 
+def get_best_match(connection, simulation_id, weight_func='uniform'):
+    """
+    Gets the best matching template to the given injection from the all_results
+    table.
+    
+    Parameters
+    ----------
+    connection: sqlite3 connection
+        A connection to a sqlite database.
+    simulation_id: str
+        The simulation_id of the injection to get the best match for.
+    weight_func: {'uniform' | str}
+        The weight function to use. Default is uniform.
+
+    Returns
+    -------
+    best_match: OverlapResult instance or None
+        If a best match is found, returns an OverlapResult instance with
+        the effectualness, weight, weight_function, time_offset,
+        time_offset_ns, segment_length, and sample_rate populated. The
+        injection field and template field are set to the simulation_id and
+        the template's id, respectively. If no best match is found (meaning
+        that the injection hasn't been filtered yet), None is returned.
+    """
+    best_match_query = """
+        SELECT
+            a.simulation_id, a.tmplt_id, a.effectualness, w.weight,
+            a.time_offset, a.time_offset_ns, a.segment_length, a.sample_rate
+        FROM
+            all_results AS a
+        JOIN
+            tmplt_weights AS w
+        ON
+            w.tmplt_id == a.tmplt_id
+        WHERE
+            a.simulation_id == ? AND
+            w.weight_function == ?
+        ORDER BY
+            a.effectualness * w.weight
+        DESC LIMIT 1"""
+    result =  connection.cursor().execute(best_match_query,
+        (simulation_id, weight_func)).fetchone()
+    if result is not None:
+        simid, tmpltid, eff, wt, dt, dt_ns, seg_length, sample_rate = result
+        # note, we're just storing the simulation_id and the tmplt_id as
+        # as the OverlapResult's injection and template parameters, not the
+        # injection and the template itself
+        bestMatch = OverlapResult(tmpltid, simid)
+        bestMatch.effectualness = eff
+        bestMatch.weight = wt
+        bestMatch.weight_function = weight_func
+        bestMatch.time_offset = dt
+        bestMatch.time_offset_ns = dt_ns
+        bestMatch.segment_length = seg_length
+        bestMatch.sample_rate = sample_rate
+    else:
+        bestMatch = None
+    return bestMatch 
+
+
+def prune_all_results(connection, injections, weight_functions=['uniform'],
+        vacuum=True, verbose=False):
+    """
+    Deletes results from the all_results table that are not the best matches
+    to each injection.
+    """
+    if verbose:
+        print >> sys.stdout, "pruning all_results table:"
+    crs = connection.cursor()
+    # create a temporary table to store the results to keep
+    if verbose:
+        print >> sys.stdout, "getting ids to keep..."
+    sqlquery = """CREATE TEMP TABLE saved_ids (simulation_id, tmplt_id)"""
+    crs.execute(sqlquery)
+    saved_ids = []
+    for inj in injections.as_list:
+        for weight_func in weight_functions:
+            best_match = get_best_match(connection, str(inj.simulation_id),
+                weight_func)
+            if best_match is not None:
+                saved_ids.append((best_match.injection, best_match.template))
+    # insert the best match ids into the database
+    sqlquery = "INSERT INTO saved_ids (simulation_id, tmplt_id) VALUES (?,?)"
+    crs.executemany(sqlquery, saved_ids)
+    # add an index for faster deleting
+    crs.execute("""
+        CREATE INDEX tmp_sidtid_idx ON saved_ids (simulation_id, tmplt_id)
+        """)
+    # now delete the entries from all_results that don't match
+    if verbose:
+        print >> sys.stdout, "deleting entries from all_results..."
+    sqlquery = """
+        DELETE FROM
+            all_results
+        WHERE NOT EXISTS (
+            SELECT
+                *
+            FROM
+                saved_ids
+            WHERE
+                saved_ids.simulation_id == all_results.simulation_id AND
+                saved_ids.tmplt_id == all_results.tmplt_id)
+    """
+    crs.execute(sqlquery)
+    # drop the table
+    crs.execute("DROP TABLE saved_ids")
+    connection.commit()
+    if vacuum:
+        if verbose:
+            print >> sys.stdout, "vacuuming"
+        crs.execute("VACUUM")
+
+
 def get_overlap_results(connection, verbose=False):
     """
     Gets the overlap_results, injections, and mapping templates.
