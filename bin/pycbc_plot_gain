@@ -38,8 +38,8 @@ def get_stat_info(opt):
 
 
 parser = OptionParser()
-parser.add_option('-c', '--test-cache-file', help='Required. Cache file containing test result databases.')
-parser.add_option('', '--reference-cache-file', help='Required if reference-stat is not "optimal". Cache file containing reference result databases.')
+parser.add_option('-c', '--test-cache-file', metavar="TESTFILE.CACHE[:TESTLABEL]", help='Required. Cache file containing test result databases. Can also specify a label for the test results; if none provided "test" will be used.')
+parser.add_option('', '--reference-cache-file',  metavar="REFFILE.CACHE[:REFLABEL]", help='Required if reference-stat is not "optimal". Cache file containing reference result databases. Can also specify a label for the reference results; if none provided "reference" will be used.')
 parser.add_option('-l', '--layer-config-file', help='Required. A config file containing the layer parameters to use.') 
 parser.add_option('', '--reference-threshold', type='float', help='Required. The value of the ranking stat to use as the threshold when computing efficiencies for the reference run.')
 parser.add_option('', '--test-threshold', type='float', help='Required. The value of the ranking stat to use as the threshold when computing efficiencies for the test run.')
@@ -53,6 +53,7 @@ parser.add_option('', '--log-stat', action='store_true', default=False, help='Ma
 parser.add_option('-N', '--min-ninj', type='int', default=2, help='Minimum number of injections that must exist in a block in in order to calculate volume. If a block has less then this, it will be skipped. Default is 2.')
 parser.add_option('', '--print-relative-error', action='store_true', default=False, help='Turn on to print relative errors instead of absolute errors.')
 parser.add_option('', '--use-distance-bins', action='store_true', default=False, help="If turned on, will use distance bins to compute sensitive volumes, rather than the standard Monte Carlo method of using the average of the integrand. Generally, this will yield larger variance, so turn this on with caution.")
+parser.add_option('', '--include-volume-plots', action='store_true', default=False, help='Include the volume tile plots of the test and reference results to the summary html pages.')
 parser.add_option('-p', '--subplots-cache', help='Load subplots for each tile from the given cache file.')
 parser.add_option('-o', '--output-dir', help='Directory to save results to.')
 parser.add_option('-u', '--user-tag', default='', help='Add a user tag to all output files.')
@@ -158,22 +159,38 @@ for thiscut in opts.apply_cut:
     apply_cut[arg] = map(float, vals.split(','))
 
 print "getting test results"
-test_label = ''
-filenames = plot_utils.parse_results_cache(opts.test_cache_file)
+cache_info = opts.test_cache_file.split(':')
+if len(cache_info) == 1:
+    test_cache = cache_info[0]
+    test_label = r'\mathrm{test}'
+elif len(cache_info) == 2:
+    test_cache, test_label = cache_info
+else:
+    raise ValueError("test-cache-file not formatted correctly; see help")
+filenames = plot_utils.parse_results_cache(test_cache)
 test_results, _ = plot_utils.get_injection_results(filenames, verbose=True)
 
 if apply_cut:
     print "applying cuts"
     test_results = plot_utils.slice_results(test_results, apply_cut)
 
-ref_label = ''
 if opts.reference_stat != 'optimal':
     print "getting reference results"
-    filenames = plot_utils.parse_results_cache(opts.reference_cache_file)
+    cache_info = opts.reference_cache_file.split(':')
+    if len(cache_info) == 1:
+        ref_cache = cache_info[0]
+        ref_label = r'\mathrm{reference}'
+    elif len(cache_info) == 2:
+        ref_cache, ref_label = cache_info
+    else:
+        raise ValueError("reference-cache-file not formatted correctly; " +\
+            "see help")
+    filenames = plot_utils.parse_results_cache(ref_cache)
     ref_results, _ = plot_utils.get_injection_results(filenames, verbose=True)
 else:
     # just set the reference data to be the same as the test
     ref_results = test_results
+    ref_label = r'\mathrm{optimal}'
 
 # set the top level data and ranking parameters
 print "binning data"
@@ -209,6 +226,23 @@ if mingain is None or maxgain is None:
     if maxgain is None:
         maxgain = Gs.max()
 
+if opts.include_volume_plots:
+    # if we're including volume plots, get the minimum and maximum volume
+    # from all tiles
+    test_Vs = numpy.array([child.test_cube.get_volume(test_threshold)[0] \
+        for layer in layers \
+        for child in layer.all_children \
+            if child.nsamples >= opts.min_ninj and numpy.isfinite(
+            child.get_fractional_gain(ref_threshold, test_threshold)[0])])
+    ref_Vs = numpy.array([child.reference_cube.get_volume(ref_threshold)[0] \
+        for layer in layers \
+        for child in layer.all_children \
+            if child.nsamples >= opts.min_ninj and numpy.isfinite(
+            child.get_fractional_gain(ref_threshold, test_threshold)[0])])
+    minvol = min(test_Vs.min(), ref_Vs.min())
+    maxvol = max(test_Vs.max(), ref_Vs.max())
+
+
 # Plot
 print "plotting"
 html_tmplt = '%slevel_%i-%s_%i.html'
@@ -230,7 +264,8 @@ while this_layer is not None:
         test_label=test_label, ref_label=ref_label, colormap=opts.colormap,
         maxgain=maxgain, mingain=mingain, fontsize=opts.fontsize,
         print_relative_err=opts.print_relative_error,
-        logz=opts.logz, dpi=opts.dpi, verbose=True)
+        logz=opts.logz, include_volume_plots=opts.include_volume_plots,
+        minvol=minvol, maxvol=maxvol, dpi=opts.dpi, verbose=True)
 
     # if not the last layer, create the subvolumes plot
     if this_layer.sub_layer is not None:
@@ -257,7 +292,8 @@ while this_layer is not None:
             html_name = html_tmplt %(this_layer.web_dir, this_layer.level,
                 'parent', ii)
         parent.create_html_page(this_layer.root_dir, html_name, test_threshold,
-            ref_threshold, mapper=mapper,
+            ref_threshold, test_label=test_label, ref_label=ref_label,
+            mapper=mapper,
             print_relative_error=opts.print_relative_error)
 
     this_layer = this_layer.super_layer
