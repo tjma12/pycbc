@@ -95,6 +95,9 @@ def plot_snrchi(results, labels=[], colors=[], plot_newsnrs=[],
     plot_data = {} 
     for ii,result_group in enumerate(results):
         snrs = numpy.array([x.snr for x in result_group])
+        if snrs.shape[0] == 0:
+            # nothing to plot, continue
+            continue
         chisqs = numpy.array([x.chisq for x in result_group])
         ndofs = numpy.array([x.chisq_dof for x in result_group])
         if plot_reduced:
@@ -119,6 +122,11 @@ def plot_snrchi(results, labels=[], colors=[], plot_newsnrs=[],
         plot_data[lbl] = {}
         plot_data[lbl]['snrs'] = snrs
         plot_data[lbl]['chisqs'] = chisqs
+
+    # if nothing was plotted, just create an empty plot and exit
+    if plot_data == {}:
+        plot_utils.empty_plot(ax) 
+        return fig, plot_data
 
     plt_xmin, plt_xmax = ax.get_xlim()
     plt_ymin, plt_ymax = ax.get_ylim()

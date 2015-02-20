@@ -59,7 +59,7 @@ if not os.path.exists(opts.output_dir):
 # load layers if desired
 if opts.layer_config_file is not None:
     layers = efficiency.create_layers_from_config(opts.layer_config_file)
-    pcubes = efficiency.get_all_cubes_in_layers(top_layer)
+    pcubes = efficiency.get_all_cubes_in_layers(layers[0])
 else:
     # just create an empty phyper cube; this will cause all of the data
     # to be plotted
@@ -114,6 +114,9 @@ for ii,cache_file_arg in enumerate(cache_files):
     filenames = plot_utils.parse_results_cache(cache_file)
     results, _ = plot_utils.get_injection_results(filenames,
         weight_function=weight_function, verbose=True)
+    # exclude any zero SNRs
+    print "excluding injections with SNR = 0."
+    results = [x for x in results if x.snr != 0.]
     if apply_cut:
         print "  applying cuts"
         results = plot_utils.slice_results(results, apply_cut)

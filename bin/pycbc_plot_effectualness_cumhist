@@ -51,7 +51,7 @@ else:
 # load layers if desired
 if opts.layer_config_file is not None:
     layers = efficiency.create_layers_from_config(opts.layer_config_file)
-    pcubes = efficiency.get_all_cubes_in_layers(top_layer)
+    pcubes = efficiency.get_all_cubes_in_layers(layers[0])
 else:
     # just create an empty phyper cube; this will cause all of the data
     # to be plotted

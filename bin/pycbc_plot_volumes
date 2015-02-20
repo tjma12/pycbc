@@ -9,6 +9,7 @@ gather plots from other progams and place them on the summary pages."""
 import os, sys, shutil
 from optparse import OptionParser
 import numpy
+from pycbc import distributions
 from pycbc.plot import plot_utils
 from pycbc.plot import efficiency
 from pycbc.plot import plot_volumes
@@ -24,6 +25,7 @@ parser.add_option('-r', '--stat-range', metavar='MIN_STAT,MAX_STAT[:log]', defau
 parser.add_option('-N', '--min-ninj', type='int', default=2, help='Minimum number of injections that must exist in a block in in order to calculate volume. If a block has less then this, it will be skipped. Default is 2.')
 parser.add_option('', '--print-relative-error', action='store_true', default=False, help='Turn on to print relative errors instead of absolute errors.')
 parser.add_option('', '--use-distance-bins', action='store_true', default=False, help="If turned on, will use distance bins to compute sensitive volumes, rather than the standard Monte Carlo method of using the average of the integrand. Generally, this will yield larger variance, so turn this on with caution.")
+parser.add_option('-A', '--astrophysical-prior', metavar='AST_DISTR.cfg', help='Use the astrophysical prior provided in the given config file. Default is to use whatever was used in the injection set.')
 parser.add_option('-p', '--additional-plots-cache', metavar='FILE1.cache[,FILE2.cache,...]', help='Load additional plots for each cube from the given cache file(s). To specify multiple cache files, comma separate each file name. All cache files must have used the same layer-configuration-file.')
 parser.add_option('-o', '--output-dir', help='Directory to save results to.')
 parser.add_option('-u', '--user-tag', default='', help='Add a user tag to all output files.')
@@ -46,6 +48,12 @@ if not opts.cache_file:
     raise ValueError('cache-file required')
 if not opts.output_dir:
     raise ValueError('output-dir required')
+
+if opts.astrophysical_prior is not None:
+    astprior = distributions.load_distribution_from_config(
+        opts.astrophysical_prior)
+else:
+    astprior = None
 
 # set the distance bins option if desired
 efficiency.PHyperCube.use_distance_bins = opts.use_distance_bins
@@ -75,7 +83,6 @@ min_stat = float(min_stat)
 max_stat = float(max_stat)
 
 # load the layers
-print "loading layers"
 layers = efficiency.create_layers_from_config(opts.layer_config_file,
     cube_type='single')
 
@@ -111,7 +118,12 @@ for ii,layer in enumerate(layers):
     layer.images_dir = imgdir
     # update this_folder for the next lower layer
     this_folder = '%slayer%i/'%(this_folder, ii+1) 
-    
+
+# if an astrophysical prior is desired, set it for all of the cubes
+if astprior is not None:
+    for pcube in efficiency.get_all_cubes_in_layers(layers[0]):
+        pcube.set_astro_prior(astprior)
+
 # if additional plots cache are specified, load them
 if opts.additional_plots_cache is not None:
     print "creating symbolic links to additional plots..."
@@ -155,8 +167,13 @@ if opts.additional_plots_cache is not None:
 
 print "getting results"
 filenames = plot_utils.parse_results_cache(opts.cache_file)
-results, id_map = plot_utils.get_injection_results(filenames, verbose=True)
+results, id_map = plot_utils.get_injection_results(filenames,
+    load_inj_distribution=True, verbose=True)
+# exclude any zero SNRs
+print "excluding injections with SNR = 0."
+results = [x for x in results if x.snr != 0.]
 
+print "total number of injections: %i" %(len(results))
 apply_cut = {}
 for thiscut in opts.apply_cut:
     arg, vals = thiscut.split(':')
@@ -164,6 +181,7 @@ for thiscut in opts.apply_cut:
 if apply_cut:
     print "applying cuts"
     results = plot_utils.slice_results(results, apply_cut)
+    print "total number of injections after cuts: %i" %(len(results))
 
 # set the top level data and ranking parameters
 print "binning data"
@@ -177,19 +195,27 @@ while next_layer is not None:
     next_layer.set_ranking_params(ranking_stat, opts.rank_by, stat_label)
     next_layer = next_layer.sub_layer
 
+# set the total number of injections for each cube
+total_Ninj = len(results)
+for pcube in efficiency.get_all_cubes_in_layers(layers[0]):
+    pcube.total_num_inj = total_Ninj
+
 # if min, max vol aren't specified, get the minimum/maximum volumes across
 # all of the tiles
 minvol = opts.minvol
 maxvol = opts.maxvol
-if minvol is None or maxvol is None:
-    print "getting min, max volumes"
-    Vs = numpy.array([child.get_volume(opts.threshold)[0] for layer in layers \
-        for child in layer.all_children if child.nsamples >= opts.min_ninj
-        and child.get_volume(opts.threshold)[0] != 0.])
-    if minvol is None:
-        minvol = Vs.min()
-    if maxvol is None:
-        maxvol = Vs.max()
+#if minvol is None or maxvol is None:
+#    print "getting min, max volumes"
+#    Vs = numpy.array([child.get_volume(opts.threshold)[0] \
+#        for layer in layers \
+#        for child in layer.all_children if child.nsamples >= opts.min_ninj
+#        and child.get_volume(opts.threshold)[0] != 0.])
+#    if minvol is None:
+#        minvol = Vs.min()
+#    if maxvol is None:
+#        maxvol = Vs.max()
+#minvol = None
+#maxvol = None
 
 # Plot
 print "plotting"
@@ -215,7 +241,7 @@ while this_layer is not None:
         logz=opts.logz, dpi=opts.dpi, verbose=True)
 
     # if not the last layer, create the subvolumes plot
-    if this_layer.sub_layer is not None:
+    if not this_is_lowest_layer:
         plot_volumes.plot_subvolumes_from_layer(this_layer, opts.threshold,
             user_tag=opts.user_tag, min_ninj=opts.min_ninj,
             tmplt_label='', inj_label='', colormap=opts.colormap,

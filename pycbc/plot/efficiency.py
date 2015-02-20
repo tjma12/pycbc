@@ -1,4 +1,31 @@
-#! /usr/bin/env python
+# Copyright (C) 2015  Collin Capano
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation; either version 3 of the License, or (at your
+# option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+# Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+
+#
+# =============================================================================
+#
+#                                   Preamble
+#
+# =============================================================================
+#
+"""
+This module provides classes to organize injections in a hierarchy based on
+their parameters for purposes of calculating sensitive volumes.
+"""
 
 import os
 import numpy
@@ -8,6 +35,7 @@ import copy
 import ConfigParser
 from glue import segments
 
+from pycbc import distributions
 from pycbc.plot import plot_utils
 
 #
@@ -57,8 +85,10 @@ class PHyperCube:
         self._ranking_stat = None
         self._rank_by = None
         self._stat_label = None
-        self.nsamples = None
+        self._nsamples = None
+        self.total_num_inj = None
         self._cached_volumes = {}
+        self._astro_prior = None
         # for grouping together phyper cubes
         self.parent = None
         self.children = []
@@ -139,12 +169,29 @@ class PHyperCube:
         param_range = self.get_bound(param)
         return param_range[0] + abs(param_range)/2.
 
+    def set_astro_prior(self, prior):
+        """
+        Sets an astrophysical prior to use when computing sensitive volume.
+        """
+        self._astro_prior = prior
+
+    @property
+    def astro_prior(self):
+        return self._astro_prior
+
     def set_data(self, data):
         """
         Given some data, extracts the points that are relevant to this cube.
         """
         self.data = plot_utils.slice_results(data, self.bounds)
-        self.nsamples = len(self.data)
+        self._nsamples = len(self.data)
+    
+    @property
+    def nsamples(self):
+        """
+        Gives the number of samples in self's data.
+        """
+        return self._nsamples
 
     def set_ranking_params(self, ranking_stat, rank_by, stat_label=None):
         """
@@ -222,13 +269,14 @@ class PHyperCube:
                 err_low /= 2.26**3.
             else:
                 volume, err_high = self._integrate_efficiency(threshold,
-                    self._ranking_stat, self._rank_by)
+                    self._ranking_stat, self._rank_by, self.astro_prior)
                 err_low = err_high
             self._cached_volumes[threshold,self._ranking_stat,self._rank_by] =\
                 volume, err_high, err_low
             return volume, err_high, err_low
 
-    def _integrate_efficiency(self, threshold, ranking_stat, rank_by):
+    def _integrate_efficiency(self, threshold, ranking_stat, rank_by,
+            astro_prior=None):
         """
         Integrates the efficiency in self's bounds to get a measure of the
         sensitive volumes.
@@ -246,6 +294,15 @@ class PHyperCube:
         integrand = numpy.array([x.inj_min_vol + x.inj_weight * \
             float(_isfound(x, ranking_stat, compare_operator, threshold)) \
             for x in self.data])
+        if astro_prior is not None:
+            # apply the appropriate astrophysical prior
+            # FIXME: this currently only works on masses
+            weights = numpy.array([distributions.convert_distribution(
+                x, x.inj_mass_distr, astro_prior) for x in self.data])
+            integrand *= weights / weights.mean()
+        elif self.total_num_inj is not None:
+            # correct for the number of injections in this tile
+            integrand *= self.nsamples / float(self.total_num_inj)
         return integrand.mean(), integrand.std()/numpy.sqrt(len(integrand))
 
     def clear_cache(self):
@@ -711,6 +768,9 @@ def _create_html_page(phyper_cube, out_dir, html_name, threshold=None,
     print >> f, "<h2>"
     print >> f, "Total number of injections: %i<br />" %(
         phyper_cube.nsamples)
+    if phyper_cube.astro_prior is not None:
+        print >> f, "Astrophysical prior: %s<br />" %(
+            phyper_cube.astro_prior.description)
     if phyper_cube.nsamples > 1:
         if write_gain:
             V, err, err_minus = phyper_cube.test_cube.get_volume(threshold)
@@ -1380,7 +1440,7 @@ def get_file_checksum(filename):
     """
     Gets the SHA 256 checksum of the given file.
     """
-    return hashlib.sha256(open(filename, 'rb').read()).digest()
+    return hashlib.sha256(open(filename, 'rb').read()).hexdigest()
 
 
 def get_layers_checksum(top_layer):
@@ -1400,7 +1460,7 @@ def get_layers_checksum(top_layer):
             this_layer.x_nbins, this_layer.x_distr,
             this_layer.y_param, y_min, y_max, this_layer.y_nbins]))
         this_layer = this_layer.sub_layer
-    return hashlib.sha256(','.join(description)).digest()
+    return hashlib.sha256(','.join(description)).hexdigest()
 
 
 def write_plot_cache(cachename, top_layer, layer_config_file):

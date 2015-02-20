@@ -8,6 +8,8 @@ import lal
 import matplotlib
 from matplotlib import pyplot
 
+from pycbc import distributions
+
 def drop_trailing_zeros(num):
     """
     Drops the trailing zeros in a float that is printed.
@@ -51,6 +53,25 @@ def get_signum(val, err, max_sig=numpy.inf):
                         "values are: val = %f, err = %f" %(val, err))
         return drop_trailing_zeros(return_val)
 
+def get_color_grayscale(clr):
+    """
+    Converts the given color to grayscale. The equation used to do the
+    conversion comes from:
+    en.wikipedia.org/wiki/Grayscale#Converting_color_to_grayscale
+
+    Parameters
+    ----------
+    clr: tuple
+        A color tuple. Should be in the form of (R, G, B, A).
+
+    Returns
+    -------
+    grayscale: float
+        A number between 0. and 1. representing the grayscale, with 0 = black,
+        1 = white.
+    """
+    r, g, b, a = clr
+    return 0.299*r + 0.587*g + 0.114*b
 
 def ColorBarLog10Formatter(y, pos):
     """
@@ -65,6 +86,18 @@ def empty_plot(ax, message="Nothing to plot"):
     # ensure the axis background is white, so the text can be read
     ax.set_axis_bgcolor('w')
     return ax.annotate(message, (0.5, 0.5))
+
+def empty_hatched_plot(ax, hatch="x"):
+    """
+    Creates an empty plot on the given axis consisting entirely of a hatched
+    background.
+    """
+    tile = ax.fill((0,1,1,0), (0,0,1,1), hatch=hatch, facecolor='w')
+    ax.set_xlim(0,1)
+    ax.set_ylim(0,1)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    return tile
 
 
 #############################################
@@ -91,6 +124,9 @@ class Result:
         self.inj_sigma = {}
         self.inj_min_vol = None
         self.inj_weight = None
+        self.inj_mass_distr = None
+        self.inj_spin_distr = None
+        self.astro_prior = None
         self.effectualness = None
         self.weight_function = None
         self.weight = None
@@ -117,6 +153,14 @@ class Result:
         """
         return numpy.sqrt((numpy.array(self.inj_sigma.values())**2.).sum()) \
             / self.distance
+
+    @property
+    def mass1(self):
+        return self.m1
+
+    @property
+    def mass2(self):
+        return self.m2
 
     @property
     def mtotal(self):
@@ -207,11 +251,11 @@ def parse_results_cache(cache_file):
     f.close()
     return filenames
 
-def get_injection_results(filenames, weight_function='uniform',
-        verbose=False):
+def get_injection_results(filenames, load_inj_distribution=False,
+        weight_function='uniform', verbose=False):
     sqlquery = """
         SELECT
-            sim.waveform, sim.simulation_id,
+            sim.process_id, sim.waveform, sim.simulation_id,
             sim.mass1, sim.mass2, sim.spin1z, sim.spin2z,
             sim.distance, sim.inclination, tmplt.event_id,
             tmplt.mass1, tmplt.mass2, tmplt.spin1z, tmplt.spin2z,
@@ -247,6 +291,7 @@ def get_injection_results(filenames, weight_function='uniform',
     results = []
     id_map = {}
     idx = 0
+    inj_dists = {}
     for ii,thisfile in enumerate(filenames):
         if verbose:
             print >> sys.stdout, "%i / %i\r" %(ii+1, len(filenames)),
@@ -256,7 +301,7 @@ def get_injection_results(filenames, weight_function='uniform',
         connection = sqlite3.connect(thisfile)
         cursor = connection.cursor()
         try:
-            for (apprx, sim_id, m1, m2, s1z, s2z, dist, inc,
+            for (sim_proc_id, apprx, sim_id, m1, m2, s1z, s2z, dist, inc,
                     tmplt_evid, tmplt_m1, tmplt_m2, tmplt_s1z,
                     tmplt_s2z, ff, snr,
                     snr_std, weight, chisq, chisq_std, chisq_dof, new_snr,
@@ -300,6 +345,18 @@ def get_injection_results(filenames, weight_function='uniform',
                 thisRes.sample_rate = sample_rate
                 thisRes.database = thisfile
                 thisRes.coinc_event_id = ceid
+                # get the injection distribution information
+                if load_inj_distribution:
+                    try:
+                        thisRes.inj_mass_distr = inj_dists[thisfile,
+                            sim_proc_id]
+                    except KeyError:
+                        # need to load the distribution
+                        inj_dists[thisfile, sim_proc_id] = \
+                            distributions.get_inspinj_distribution(connection,
+                            sim_proc_id)
+                        thisRes.inj_mass_distr = inj_dists[thisfile,
+                            sim_proc_id]
                 results.append(thisRes)
 
             # try to get the sim_inspiral_params table

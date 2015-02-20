@@ -78,6 +78,33 @@ def _plot_tiles(ax, zvals, plus_errs, minus_errs, phyper_cubes,
         zvals = numpy.log10(zvals)
         vmin = numpy.log10(vmin)
         vmax = numpy.log10(vmax)
+    # check what the grayscale is on either end of the color maps; if vmin or
+    # vmax is close to black, we'll bump them down/up slightly so as not to
+    # blend with the background
+    min_gray = plot_utils.get_color_grayscale(
+        getattr(pyplot.cm, colormap)(0.))
+    new_vmin = vmin
+    # to prevent infinite loops, we'll give up after 100 steps
+    step_count = 0
+    while min_gray < 0.1 and step_count < 100:
+        new_vmin = new_vmin - 0.01*new_vmin 
+        clrfac = (vmin - new_vmin)/(vmax - new_vmin)
+        min_gray = plot_utils.get_color_grayscale(
+            getattr(pyplot.cm, colormap)(clrfac))
+        step_count += 1
+    vmin = new_vmin
+    # ditto for vmax
+    min_gray = plot_utils.get_color_grayscale(
+        getattr(pyplot.cm, colormap)(1.))
+    new_vmax = vmax
+    step_count = 0
+    while min_gray < 0.1 and step_count < 100:
+        new_vmax = new_vmax + 0.01*new_vmax 
+        clrfac = (vmax - vmin)/(new_vmax - vmin)
+        min_gray = plot_utils.get_color_grayscale(
+            getattr(pyplot.cm, colormap)(clrfac))
+        step_count += 1
+    vmax = new_vmax
     if annotate and (plus_errs is None or minus_errs is None):
         raise ValueError("annotate requires plus_errs and minus_errs")
     # if not annotating, we don't need the errors, so if they were passed as
@@ -106,10 +133,7 @@ def _plot_tiles(ax, zvals, plus_errs, minus_errs, phyper_cubes,
         clr = getattr(pyplot.cm, colormap)(clrfac)
 
         # get the color to use for the text
-        # convert the tile color to grayscale; following equation comes from
-        # http://en.wikipedia.org/wiki/Grayscale#Converting_color_to_grayscale
-        r, g, b, a = clr
-        clr_grayscale = 0.299*r + 0.587*g + 0.114*b
+        clr_grayscale = plot_utils.get_color_grayscale(clr)
         if annotate:
             if clr_grayscale < 0.25:
                 txt_clr = 'w'
@@ -133,6 +157,12 @@ def _plot_tiles(ax, zvals, plus_errs, minus_errs, phyper_cubes,
                 txty = numpy.log10(10**min(y) + (10**max(y)-10**min(y))/2.)
             else:
                 txty = min(y) + (max(y) - min(y))/2.
+
+        # add a border if the grayscale is close to black
+        #if clr_grayscale < 0.1:
+        #    edgecolor = 'gray'
+        #else:
+        #    edgecolor = 'none'
 
         # plot
         tile = ax.fill(x, y, color=clr, zorder=1)[0]
@@ -609,8 +639,9 @@ def plot_volumes(phyper_cubes, xarg, xlabel, yarg, ylabel, threshold,
         minvol = Vs.min()
     if maxvol is None:
         maxvol = Vs.max()
-    # we'll divide by the closest power of 10 of the smallest value
-    conversion_factor = numpy.floor(numpy.log10(minvol))
+    # we'll divide by the closest power of 10 of the smallest value of these
+    # volumes
+    conversion_factor = numpy.floor(numpy.log10(Vs.min()))#minvol))
     Vs *= 10**(-conversion_factor)
     plus_errs *= 10**(-conversion_factor)
     minus_errs *= 10**(-conversion_factor)
@@ -724,28 +755,35 @@ def plot_subvolumes(phyper_cubes, xarg, xlabel, yarg, ylabel,
         # now create the sub plot in the inset_axes
         # note that we turn off the clickables in the inset_axes; also, we'll
         # add the axis labels later
-        plot_volumes(
-            parent.children, sub_xarg, None, sub_yarg, None, threshold,
-            min_ninj=min_ninj, add_title=False, colormap=colormap,
-            maxvol=maxvol, minvol=minvol, add_colorbar=False, annotate=False,
-            logx=sub_logx, logy=sub_logy, logz=logz, fig=mfig, ax=inset_axes,
-            add_clickables=False)
-        sub_xmin = min([child.get_bound(sub_xarg)[0] \
-            for child in parent.children])
-        sub_xmax = max([child.get_bound(sub_xarg)[1] \
-            for child in parent.children])
-        if sub_logx:
-            sub_xmin = numpy.log10(sub_xmin)
-            sub_xmax = numpy.log10(sub_xmax)
-        sub_ymin = min([child.get_bound(sub_yarg)[0] \
-            for child in parent.children])
-        sub_ymax = max([child.get_bound(sub_yarg)[1] \
-            for child in parent.children])
-        if sub_logy:
-            sub_ymin = numpy.log10(sub_ymin)
-            sub_ymax = numpy.log10(sub_ymax)
-        inset_axes.set_xlim(sub_xmin, sub_xmax)
-        inset_axes.set_ylim(sub_ymin, sub_ymax)
+        # if there are not enough injections in all of the tiles, just create
+        # a hatched empty plot
+        if not numpy.array([child.nsamples >= min_ninj \
+            for child in parent.children]).any():
+                plot_utils.empty_hatched_plot(inset_axes, hatch="x") 
+        else:
+            plot_volumes(
+                parent.children, sub_xarg, None, sub_yarg, None, threshold,
+                min_ninj=min_ninj, add_title=False, colormap=colormap,
+                maxvol=maxvol, minvol=minvol,
+                add_colorbar=False, annotate=False,
+                logx=sub_logx, logy=sub_logy, logz=logz,
+                fig=mfig, ax=inset_axes, add_clickables=False)
+            sub_xmin = min([child.get_bound(sub_xarg)[0] \
+                for child in parent.children])
+            sub_xmax = max([child.get_bound(sub_xarg)[1] \
+                for child in parent.children])
+            if sub_logx:
+                sub_xmin = numpy.log10(sub_xmin)
+                sub_xmax = numpy.log10(sub_xmax)
+            sub_ymin = min([child.get_bound(sub_yarg)[0] \
+                for child in parent.children])
+            sub_ymax = max([child.get_bound(sub_yarg)[1] \
+                for child in parent.children])
+            if sub_logy:
+                sub_ymin = numpy.log10(sub_ymin)
+                sub_ymax = numpy.log10(sub_ymax)
+            inset_axes.set_xlim(sub_xmin, sub_xmax)
+            inset_axes.set_ylim(sub_ymin, sub_ymax)
         if ii == label_idx:
             # make the ticklabels white
             if sub_logx: 

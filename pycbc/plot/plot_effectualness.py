@@ -70,17 +70,31 @@ def plot_effectualness(results, xarg, xlabel, yarg, ylabel,
     cb.ax.set_xlabel('$\mathcal{E}_{\mathrm{%s}}$' % lbl, labelpad=-35)
     cb.ax.xaxis.set_ticks_position('top')
 
-    # get the axis limits
-    plt_xmin, plt_xmax = ax.get_xlim()
-    if xmin is not None:
-        plt_xmin = xmin
-    if xmax is not None:
-        plt_xmax = xmax
-    plt_ymin, plt_ymax = ax.get_ylim()
-    if ymin is not None:
-        plt_ymin = ymin
-    if ymax is not None:
-        plt_ymax = ymax
+    # set the axis limits
+    if xmin is None:
+        if logx:
+            xmin = xvals.min()*10**(-0.1)
+        else:
+            x_range = xvals.max() - xvals.min()
+            xmin = xvals.min() - x_range/20.
+    if xmax is None:
+        if logx:
+            xmax = xvals.max()*10**(0.1)
+        else:
+            x_range = xvals.max() - xvals.min()
+            xmax = xvals.max() + x_range/20.
+    if ymin is None:
+        if logy:
+            ymin = yvals.min()*10**(-0.1)
+        else:
+            y_range = yvals.max() - yvals.min()
+            ymin = yvals.min() - y_range/20.
+    if ymax is None:
+        if logy:
+            ymax = yvals.max()*10**(0.1)
+        else:
+            y_range = yvals.max() - yvals.min()
+            ymax = yvals.max() + y_range/20.
 
     if plot_templates:
         xvals = [plot_utils.get_arg(tmplt, xarg) for tmplt in templates]
@@ -97,8 +111,10 @@ def plot_effectualness(results, xarg, xlabel, yarg, ylabel,
     elif logy:
         ax.semilogy()
     # set the axis limits
-    ax.set_xlim(plt_xmin, plt_xmax)
-    ax.set_ylim(plt_ymin, plt_ymax)
+    if xmin != xmax:
+        ax.set_xlim(xmin, xmax)
+    if ymin != ymax:
+        ax.set_ylim(ymin, ymax)
 
     # make axes white if the background is black
     if bkgclr == 'k' or bkgclr == 'black':
