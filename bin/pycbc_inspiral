@@ -189,7 +189,7 @@ with ctx:
                                                 norm, idx+stilde.analyze.start)
 
             out_vals['chisq'], out_vals['chisq_dof'] = power_chisq.values(corr,
-                       snr, snrv, norm, psd, idx+stilde.analyze.start, template)
+                           snrv, norm, psd, idx+stilde.analyze.start, template)
 
             snrv *= norm
 
@@ -201,7 +201,7 @@ with ctx:
 
             out_vals['time_index'] = idx
             out_vals['snr'] = snrv
-
+            print out_vals['chisq'], out_vals['snr']
             event_mgr.add_template_events(names, [out_vals[n] for n in names])
 
         event_mgr.cluster_template_events("time_index", "snr", cluster_window)
