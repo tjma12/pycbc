@@ -713,21 +713,12 @@ def get_exval_outfilename(output_directory, ifo, user_tag = None, num = None):
         tag)
 
 
-def copy_to_output(infile, outfile, verbose = False, warn_overwrite = True, num_retries = 2):
+def copy_to_output(infile, outfile, verbose=False, warn_overwrite=True):
     if verbose:
         print >> sys.stdout, "Copying %s to %s..." %(infile, outfile)
     if os.path.exists(outfile) and warn_overwrite:
         print >> sys.stderr, "Warning: File %s being overwritten." %(outfile)
-    ii = 0
-    copyFailure = True
-    while copyFailure and ii <= abs(num_retries):
-        shutil.copyfile(infile, outfile)
-        ii += 1
-        # check
-        copyFailure = dbtables.__md5digest(infile) != dbtables.__md5digest(outfile)
-    if copyFailure:
-        raise ValueError, "md5 checksum failure! Checksum of %s does not match %s after %i tries" % (infile, outfile, num_tries)
-    
+    shutil.copyfile(infile, outfile)
 
 
 def get_outfile_connection(infile, outfile, replace = False, verbose = False):
