@@ -13,6 +13,7 @@ import lalsimulation as lalsim
 from pycbc import types as pyTypes
 from pycbc import filter
 from pycbc import waveform
+from pycbc.filter import resample
 
 from glue import segments
 
@@ -795,7 +796,7 @@ class Waveform(object):
 
 
     def get_td_waveform(self, sample_rate, segment_length=None, position=0,
-            store=False):
+            store=False, resample_from_max=False):
 
         try:
             hplus, hcross = self.waveform_from_archive(sample_rate,
@@ -810,6 +811,14 @@ class Waveform(object):
                     "archive and archive_id must be set."
             approximant = lalsim.GetApproximantFromString(
                 str(self.approximant))
+            
+            # if the sample rate is smaller than self's max frequency, generate
+            # at the max frequency
+            if resample_from_max and sample_rate < self.min_sample_rate:
+                waveform_sample_rate = self.min_sample_rate
+            else:
+                waveform_sample_rate = sample_rate
+
             # FIXME: turning this off for now since inspinj can't set this
             # check if we need to adjust the spin order
             #wflags = lalsim.SimInspiralCreateWaveformFlags()
@@ -820,7 +829,7 @@ class Waveform(object):
             #TD waveforms
             if lalsim.SimInspiralImplementedTDApproximants(approximant):
                 hplus, hcross = lalsim.SimInspiralChooseTDWaveform(
-                    self.phi0, 1./sample_rate,
+                    self.phi0, 1./waveform_sample_rate,
                     self.mass1 * lal.MSUN_SI, self.mass2*lal.MSUN_SI,
                     self.spin1x, self.spin1y, self.spin1z, self.spin2x,
                     self.spin2y, self.spin2z, self.f_min, self.f_ref,
@@ -843,9 +852,19 @@ class Waveform(object):
 
                 # zero pad to the desired segment length 
                 if segment_length is not None:
-                    N = int(sample_rate * segment_length)
-                    hplus = zero_pad_h(hplus, N, position)
-                    hcross = zero_pad_h(hcross, N, position)
+                    N = int(waveform_sample_rate * segment_length)
+                else:
+                    # zero-pad to the nearest power of 2
+                    N = 2**int(numpy.ceil(numpy.log2(len(hplus))))
+                hplus = zero_pad_h(hplus, N, position)
+                hcross = zero_pad_h(hcross, N, position)
+
+                # resample if necessary
+                if waveform_sample_rate != sample_rate:
+                    hplus = resample.resample_to_delta_t(hplus, 1./sample_rate,
+                        method='ldas')
+                    hcross = resample.resample_to_delta_t(hcross,
+                        1./sample_rate, method='ldas')
 
                 if store:
                     self.store_waveform(hplus, sample_rate, segment_length,
@@ -861,7 +880,7 @@ class Waveform(object):
 
 
     def get_fd_waveform(self, sample_rate, segment_length, position=0,
-            store=False, store_td=False):
+            store=False, store_td=False, resample_from_max=False):
 
         try:
             htilde, htilde_cross = self.waveform_from_archive(sample_rate,
@@ -882,7 +901,7 @@ class Waveform(object):
                 # faster
                 hplus, hcross = self.get_td_waveform(sample_rate,
                     segment_length=None, position=0, archive=archive,
-                    store=store_td)
+                    store=store_td, resample_from_max=resample_from_max)
                 # zero pad to the desired segment length 
                 N = int(sample_rate * segment_length)
                 hplus = zero_pad_h(hplus, N, position)
@@ -956,7 +975,7 @@ class Template(Waveform):
         return self._wraparound_dur
 
     def get_td_waveform(self, sample_rate, segment_length, store=False,
-        reposition=True, store_unpadded=False):
+        reposition=True, store_unpadded=False, resample_from_max=False):
         """
         Modifies Waveform's get_td_waveform such that only hplus is used.
         Will also optionally reposition the template such that the peak is
@@ -977,9 +996,14 @@ class Template(Waveform):
             will be placed such that the peak amplitude occurs at the end of
             the segment, with the rest wrapped around to the start. The amount
             of wrap-around (in s) will be saved to self._wraparound_dur.
-        store_unpadded: bool
+        store_unpadded: {False|bool}
             Whether or not to store the waveform prior to 0-padding and
             repositioning. Default is False.
+        resample_from_max: {False|bool}
+            If True, the waveform will be generated at self's minimum sample
+            rate, then downsampled to sample_rate if sample_rate is less than
+            the desired sample rate. Self's f_final must be set. Default is
+            False.
 
         Returns
         -------
@@ -997,7 +1021,7 @@ class Template(Waveform):
                 raise ValueError, "In order to store the waveform, an "+\
                     "archive and archive_id must be set."
             h, cross = super(Template, self).get_td_waveform(sample_rate,
-                store=store_unpadded)
+                store=store_unpadded, resample_from_max=resample_from_max)
             # reposition
             if reposition:
                 # find where the peak amplitude is
@@ -1014,7 +1038,7 @@ class Template(Waveform):
         return h
 
     def get_fd_waveform(self, sample_rate, segment_length, store=False,
-            store_td=False):
+            store_td=False, resample_from_max=False):
         """
         Modifies Waveform's get_fd_waveform such that only hplus is used,
         and such that the template is placed so that the peak is at the
@@ -1038,6 +1062,11 @@ class Template(Waveform):
             For time-domain approximants, whether or not to store the TD
             version of the waveform in the archive. The TD waveform will
             be stored prior to 0-padding.
+        resample_from_max: {False|bool}
+            For time-domain approximants: if True, the waveform will be
+            generated at self's minimum sample rate, then downsampled to
+            sample_rate if sample_rate is less than the desired sample rate.
+            Self's f_final must be set. Default is False.
         """
         try:
             htilde, _ = self.waveform_from_archive(sample_rate,
@@ -1052,7 +1081,8 @@ class Template(Waveform):
                 str(self.approximant))
             if lalsim.SimInspiralImplementedTDApproximants(approximant):
                 h = self.get_td_waveform(sample_rate, segment_length,
-                        store=False, store_unpadded=store_td)
+                        store=False, store_unpadded=store_td,
+                        resample_from_max=resample_from_max)
                 htilde = filter.make_frequency_series(h)
             else:
                 # if FD waveform, just call parent class's version
@@ -1220,7 +1250,7 @@ class Injection(Waveform):
 
 
     def get_td_waveform(self, sample_rate, segment_length, ifo, segment_start,
-            store=False, store_unsegmented=False):
+            store=False, store_unsegmented=False, resample_from_max=False):
         """
         Modifies Waveform's get_td_waveform such that the detector response
         is applied to the waveform for the given detector.
@@ -1257,6 +1287,11 @@ class Injection(Waveform):
             in the archive. Setting to False requires less space to store, but
             will slow down repeated calls to the same waveform in the same
             segment.
+        resample_from_max: {False|bool}
+            If True, the waveform will be generated at self's minimum sample
+            rate, then downsampled to sample_rate if sample_rate is less than
+            the desired sample rate. Self's f_final must be set. Default is
+            False.
 
         Returns
         -------
@@ -1288,7 +1323,8 @@ class Injection(Waveform):
                     raise ValueError, "In order to store the waveform, an "+\
                         "archive and archive_id must be set."
                 hplus, hcross = super(Injection, self).get_td_waveform(
-                    sample_rate, store=False)
+                    sample_rate, store=False,
+                    resample_from_max=resample_from_max)
             
                 # set the epoch:  The epoch is the end time - amount of time
                 # between the first sample and the end time, which for
@@ -1333,7 +1369,7 @@ class Injection(Waveform):
 
 
     def get_fd_waveform(self, sample_rate, segment_length, ifo, segment_start,
-            store=False, store_td=False):
+            store=False, store_td=False, resample_from_max=False):
         """
         Modifies Waveform's get_fd_waveform such that the detector response
         is applied to the waveform for the given detector.
@@ -1366,6 +1402,11 @@ class Injection(Waveform):
             For time-domain approximants, whether or not to store the TD
             version of the waveform in the archive. The TD waveform will
             be stored prior to 0-padding.
+        resample_from_max: {False|bool}
+            For time-domain approximants: if True, the waveform will be
+            generated at self's minimum sample rate, then downsampled to
+            sample_rate if sample_rate is less than the desired sample rate.
+            Self's f_final must be set. Default is False.
 
         Returns
         -------
@@ -1393,7 +1434,8 @@ class Injection(Waveform):
             if lalsim.SimInspiralImplementedTDApproximants(approximant):
                 h = self.get_td_waveform(sample_rate, segment_length,
                         ifo, segment_start, store=False,
-                        store_unsegmented=store_td)
+                        store_unsegmented=store_td,
+                        resample_from_max=resample_from_max)
                 htilde = filter.make_frequency_series(h)
 
             else:

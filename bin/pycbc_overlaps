@@ -37,7 +37,7 @@ parser.add_option("-p", "--psd-model", help = "What PSD model to use for overlap
 parser.add_option("-A", "--asd-file", help = "Load the PSD from a dat file containing an ASD. If both this and psd-model specified, this will take precedence.")
 parser.add_option('-f', '--waveform-f-min', type = 'float', help = "Frequency at which to start the waveform generation (in Hz).")
 parser.add_option('-F', '--overlap-f-min', type = 'float', help = "Frequency at which to start the overlap (in Hz). Note: This must be larger than waveform-f-min.")
-parser.add_option('-r', '--sample-rate', type = 'int', help = "Required. Sample rate to use (in Hz). Must be a power of 2. If vary-n is turned on and the sample rate used to generate the waveforms and compute overlaps is less than this, the effectulaness time series will be upsampled to this sample rate. If the sample rate used in the overlap calculation is greater than this, that sample rate will be used.")
+parser.add_option('-r', '--sample-rate', type = 'int', help = "Required. Sample rate to use (in Hz). Must be a power of 2. If vary-n is turned on and the sample rate used to generate the waveforms and compute overlaps is less than this, the effectulaness time series will be upsampled to this sample rate. If vary-n and the sample rate needed to generate a waveform is greater than this, the waveform will be downsampled using the LDAS filter.")
 parser.add_option('-l', '--segment-length', type = 'int', help = "Segment length to use (in s). Must be a power of 2. Required if vary-n not used.")
 parser.add_option('-n', '--vary-n', action='store_true', default=False, help='If turned on, the sample rate and segment length used will be set to the smallest possible value between a given template and injection. This speeds up overlap calculations, but may reduce the accuracy of the effectualness measurement.')
 parser.add_option('-P', '--precision', metavar="[double|single]", default='double', help="What precision to use. Options are 'double' or 'single'. Default is double.")
@@ -463,8 +463,8 @@ for fnum, infile in enumerate(filenames):
                 # Although we will eventually 0-pad in the FD to get a common
                 # sample rate, we need to know what this common rate is for
                 # PSD generation.
-                sample_rate = int(2**(numpy.ceil(numpy.log2(
-                    max(tmplt.f_final, inj.f_final))+1)))
+                sample_rate = min(int(2**(numpy.ceil(numpy.log2(
+                    max(tmplt.f_final, inj.f_final))+1))), target_sample_rate)
 
                 # since the duration estimates are based on the 2PN
                 # approximation, the duration may be too short; we'll just put
@@ -488,9 +488,9 @@ for fnum, infile in enumerate(filenames):
                         # TD waveform, zero-pad (or generate then zero-pad, if
                         # this is the first instance)
                         if h is None:
-                            h = tmplt.get_td_waveform(tmplt.min_sample_rate,
+                            h = tmplt.get_td_waveform(sample_rate,
                                 tmplt.min_seg_length, store=False,
-                                reposition=True)
+                                reposition=True, resample_from_max=True)
                         # Because we sorted the injections by increasing
                         # duration, we can simply update the last h used with
                         # the extra 0's needed; i.e., this only ever increases
@@ -501,8 +501,8 @@ for fnum, infile in enumerate(filenames):
                         htilde = filter.make_frequency_series(h)
                     else:
                         # FD waveform, just have to regenerate
-                        htilde = tmplt.get_fd_waveform(tmplt.min_sample_rate,
-                            seg_length, store=False)
+                        htilde = tmplt.get_fd_waveform(sample_rate,
+                            seg_length, store=False, resample_from_max=True)
                     htilde = htilde * dyn_range_fac
                     htilde = htilde.astype(cmplx_type)
                     # update
@@ -520,10 +520,11 @@ for fnum, infile in enumerate(filenames):
                         segment_start, 'FD', del_unsegmented=False)
                     last_inj_seg_lengths[inj.simulation_id] = seg_length
                 # now get/create the injection
-                htildeprime = inj.get_fd_waveform(inj.min_sample_rate,
+                htildeprime = inj.get_fd_waveform(sample_rate,
                     seg_length, ifo, segment_start,
                     store=opts.use_injection_cache is not None,
-                    store_td=opts.use_injection_cache is not None)
+                    store_td=opts.use_injection_cache is not None,
+                    resample_from_max=True)
                 htildeprime = htildeprime * dyn_range_fac
                 htildeprime = htildeprime.astype(cmplx_type)
 
