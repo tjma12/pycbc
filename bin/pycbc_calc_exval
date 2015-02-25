@@ -56,6 +56,7 @@ parser.add_option("", "--taper", help = "For TD approximants, set whether or not
 parser.add_option('-b', '--n-chisq-bins', type = 'int', help = 'Number of chisq bins to use.')
 parser.add_option('-M', '--use-waveform-cache', metavar = '"memory" or "disk"', help = "Use a cache to save waveforms. This will speed up computation time if you have the same injection mapped to multiple templates, or the same template mapped to multiple injections. Options are 'memory' or 'disk'. If 'memory', all waveforms will be stored in memory. If 'disk', waveforms will be stored to a temporary h5py archive. If a temp-space is specified, this temporary archive will be placed there; otherwise, it will be created in the current working directory.")
 parser.add_option('-T', '--checkpoint-dt', type = 'float', default = numpy.inf, help = 'Number of minutes between checkpoints. Default is infinity, meaning no checkpointing.')
+parser.add_option('', '--checkpoint-window', type='float', default=0., help='To prevent all jobs writing to disk at the same time, this setting will randomize the times between checkpoints to checkpoint-dt + w, where w is chosen uniformly in the range [-checkpoint-window, checkpoint-window]. Must be less than checkpoint-dt. Default is 0.') 
 parser.add_option('-R', '--replace', action='store_true', default=False, help = 'If the output database already exists, overwrite it. Default action is not to overwrite.')
 parser.add_option('-X', '--overwrite-results', action = 'store_true', default = False, help = 'If snr, chisq, and new snr already exist in the database, overwrite them. Otherwise, results with these values populated will be skipped. Note that turning this option on effectively turns off checkpointing.')
 parser.add_option('-S', '--seed', type = 'int', default = int((time.time()*100)% 1e6), help = 'Set the seed to use for the gaussian noise generator. If none specified, will use the current time.')
@@ -64,6 +65,12 @@ parser.add_option('-v', '--verbose', action = 'store_true', help = 'Be verbose.'
 opts, filenames = parser.parse_args()
 
 # check options
+# set checkpoint window
+if opts.checkpoint_dt < opts.checkpoint_window:
+    raise ValueError("checkpoint-dt must be greater than checkpoint-window")
+checkpoint_dt = opts.checkpoint_dt + \
+    numpy.random.uniform(-opts.checkpoint_window, opts.checkpoint_window)
+
 ifo = opts.ifo
 if opts.ifo is not None:
     ifo = ifo.upper()
@@ -401,13 +408,16 @@ for fnum, infile in enumerate(filenames):
 
         # check time and update checkpoints if needed
         now = time.time()
-        if (now - last_time)/60. > opts.checkpoint_dt and \
+        if (now - last_time)/60. > checkpoint_dt and \
                 opts.tmp_space is not None:
             if opts.verbose:
                 print "\ncheckpointing..."
             overlap_utils.copy_to_output(working_filename,
                 outfile, verbose=False)
             last_time = now
+            # randomize the next checkpoint time
+            checkpoint_dt = opts.checkpoint_dt + numpy.random.uniform(
+                -opts.checkpoint_window, opts.checkpoint_window)
 
     if opts.verbose:
         print >> sys.stdout, ""
