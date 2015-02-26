@@ -192,7 +192,6 @@ with ctx:
                            snrv, norm, psd, idx+stilde.analyze.start, template)
 
             snrv *= norm
-
             out_vals['cont_chisq'] = autochisq.values(snr, corr,
                                        idx+stilde.analyze.start, template, psd,
                                        norm, low_frequency_cutoff=flow)
