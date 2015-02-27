@@ -501,7 +501,7 @@ for fnum, infile in enumerate(filenames):
                         htilde = filter.make_frequency_series(h)
                     else:
                         # FD waveform, just have to regenerate
-                        htilde = tmplt.get_fd_waveform(sample_rate,
+                        htilde = tmplt.get_fd_waveform(tmplt.min_sample_rate,
                             seg_length, store=False, resample_from_max=True)
                     htilde = htilde * dyn_range_fac
                     htilde = htilde.astype(cmplx_type)

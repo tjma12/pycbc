@@ -359,15 +359,17 @@ def filter_by_resampling(htilde, stilde, psd, fmin, target_sample_rate,
         the target sample rate (meaning resampling was done), the cmplx_snr
         will only consist of the resampled part.
     corrrelation: FrequencySeries
-        A frequency series containing the correlation vector. The length of this will be
-        equal to the segment length times the *original* sample_rate, not the resampled
-        rate (i.e., it is the correlation vector you get from matched_filter_core).
+        A frequency series containing the correlation vector. The length of
+        this will be equal to the segment length times the *original*
+        sample_rate, not the resampled rate (i.e., it is the correlation vector
+        you get from matched_filter_core).
     norm : float
         The normalization of the complex snr.  
     maxidx: int
         The index of the maximum of abs(cmpx_snr)*norm.
     offset: float
-        The offset, in seconds, between the original cmplx_snr and the resampled.
+        The offset, in seconds, between the original cmplx_snr and the
+        resampled.
     frac_error: {float, None}
         If check_error turned on, 1 - resampled_max / check_max, where
         resampled_max is the max of resampled series and check_max is the
@@ -376,8 +378,8 @@ def filter_by_resampling(htilde, stilde, psd, fmin, target_sample_rate,
     if zero_pad_to_common_Nyquist:
         intermediate_rate = 2*get_common_Nyquist(htilde, stilde)
         cmplx_snr, corr, norm = filter_by_padding(htilde, stilde, psd, fmin,
-            intermediate_rate, work_v1, work_v2, work_psd, high_frequency_cutoff,
-            h_norm, out, corr_out)
+            intermediate_rate, work_v1, work_v2, work_psd,
+            high_frequency_cutoff, h_norm, out, corr_out)
     else:
         cmplx_snr, corr, norm = filter.matched_filter_core(htilde, stilde, psd,
             fmin, high_frequency_cutoff, h_norm, out, corr_out)
