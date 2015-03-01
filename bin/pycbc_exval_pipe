@@ -1,0 +1,296 @@
+#! /usr/bin/env python
+
+import os, sys, stat
+import tempfile
+import shutil
+import copy
+import warnings
+import subprocess
+import numpy
+import ConfigParser
+from optparse import OptionParser
+
+from glue.ligolw import utils
+from glue.ligolw import table
+from glue.ligolw import lsctables
+from glue.ligolw import ligolw
+from glue.ligolw.utils import process
+from glue import pipeline
+
+from pycbc.overlaps import create_injections, overlap_utils
+
+__prog__ = 'pycbc_exval_pipe'
+__author__ = 'Collin Capano <collin.capano@ligo.org>'
+__description__ = """Given a collection of overlap results databases,
+re-randomizes the distances and finds the average SNR, chisq, and new SNR in
+Gaussian noise."""
+
+# for reading xmldocs
+class LIGOLWContentHandler(ligolw.LIGOLWContentHandler):
+    pass
+lsctables.use_in(LIGOLWContentHandler)
+
+# for writing xmldocs
+def create_xmldoc(tables):
+    """
+    Creates an xmldoc from the list of given LIGOLW tables.
+    """
+    xmldoc = ligolw.Document()
+    xmldoc.appendChild(ligolw.LIGO_LW())
+    for table in tables:
+        xmldoc.childNodes[0].appendChild(table)
+    return xmldoc
+
+
+def get_injtmpltDB_filename(output_directory, ifo, tag):
+    """
+    Function to return the combined injection/tmpltbank database file.
+    """
+    if ifo is None:
+        ifo = 'ND'
+    return '%s/%s-INJECTIONS_TMPLTBANK%s.sqlite' %( output_directory, ifo, tag.startswith('-') and tag or '_'+tag)
+
+
+def set_standard_params(job, jobexec, dagbasename):
+    job.add_condor_cmd('getenv', 'True')
+    job.set_stdout_file('logs/' + os.path.basename(jobexec) + \
+        '-$(cluster)-$(process).out')
+    job.set_stderr_file('logs/' + os.path.basename(jobexec) + \
+        '-$(cluster)-$(process).err')
+    job.set_sub_file('%s.%s.sub' %(os.path.basename(jobexec), dagbasename))
+
+
+def add_opts_from_ini(cp, section, job):
+    for option in cp.options(section):
+        arg = cp.get(section, option)
+        if arg == '':
+            arg = None
+        job.add_opt(option, arg)
+
+
+def construct_cmd_from_ini(cp, section, prog):
+    args = ['--%s %s' %(option, cp.get(section, option)) \
+        for option in cp.options(section)]
+    return '%s %s'%(prog, ' '.join(args))
+
+    
+parser = OptionParser(description = __description__, usage = '%s [options]' % __prog__)
+
+parser.add_option('-l', '--log-path', help = 'Location to put log directory. Must not be a NSF mounted file system.')
+parser.add_option('-t', '--node-local-dir', help = "User's local node directory on which to do database work.")
+parser.add_option('-u', '--user-tag', help = 'Set a user tag to be applied to the dag.')
+parser.add_option('-c', '--config-file', help = 'Get configuration settings from an ini file.')
+parser.add_option('-s', '--start-seed', type = int, help = 'Start seed for the random number generators. Each node that uses a seed argument will increment this by 1.')
+#parser.add_option('-S', '--skip-rand-dist', action='store_true', default=False, help='Skip the step that randomizes the distances using randr-by-snr.')
+
+opts, cache_files = parser.parse_args()
+
+if opts.start_seed is None:
+    raise ValueError, "start seed required"
+seed = opts.start_seed
+if not os.path.exists(opts.log_path):
+    raise ValueError, "log path not found"
+if not os.path.exists(opts.config_file):
+    raise ValueError, "config file not found"
+if opts.node_local_dir is None:
+    raise ValueError, 'node-local-dir required'
+
+# get the overlaps databases from the cache files
+overlap_databases = []
+for cache_file in cache_files:
+    cache = open(cache_file, 'r')
+    overlap_databases += [line.rstrip('\n') for line in cache \
+        if '-OVERLAPS' in line]
+
+# get ini file
+print "Parsing config-file..."
+cp = ConfigParser.ConfigParser()
+cp.read(opts.config_file)
+# create log file and directory
+tempfile.tempdir = opts.log_path
+basename = '%s%s' %( 'overlaps', opts.user_tag is not None and \
+    '-'+opts.user_tag or '' )
+fh, logfile = tempfile.mkstemp(suffix='%s.dag.log' %(basename))
+f = os.fdopen(fh, 'w')
+f.close()
+
+dag = pipeline.CondorDAG(logfile)
+dag.set_dag_file(basename)
+
+# redirect subprocess calls to a temp file
+tempfile.tempdir = '.'
+fh, tempout = tempfile.mkstemp(suffix='.out')
+tempoutf = os.fdopen(fh, 'w')
+
+# set up pipeline parameters
+if not os.path.exists('logs/'):
+    os.mkdir('logs/')
+results_dir = cp.get('pipeline', 'results-directory')
+if not os.path.exists(results_dir):
+    os.mkdir(results_dir)
+if not os.path.exists('executables'):
+    os.mkdir('executables')
+
+# we need to know the ifo for file-naming purposes
+if cp.has_option('common', 'ifo'):
+    ifo = cp.get('common', 'ifo')
+else:
+    ifo = None
+
+universe = cp.get('condor', 'universe')
+
+# get executables and set up job for each
+randDists = cp.get('condor', 'randomize_distances')
+exval_exec = cp.get('condor', 'calc_exval')
+
+# check that the executables exist
+execs = [randDists, exval_exec]
+for prog in execs:
+    if not os.path.exists(prog):
+        raise ValueError, 'executable %s not found' % prog
+    # copy to executables directory
+    shutil.copyfile(prog, 'executables/%s' %(os.path.basename(prog)))
+    shutil.copymode(prog,  'executables/%s' %(os.path.basename(prog)))
+
+randDists_job = pipeline.CondorDAGJob(universe, 'executables/%s' %(
+    os.path.basename(randDists)))
+exval_job = pipeline.CondorDAGJob(universe, 'executables/%s' %(
+    os.path.basename(exval_exec)))
+
+jobs = [(randDists, randDists_job), (exval_exec, exval_job)]
+
+# set standard job parameters 
+for jobexec, job in jobs:
+    set_standard_params(job, jobexec, basename)
+
+
+#
+#   Set static options
+#
+if cp.has_option('common', 'psd-model') and \
+        cp.has_option('common', 'asd-file'):
+    raise ValueError('must provide a psd-model or an asd-file, not both')
+elif cp.has_option('common', 'psd-model'):
+    psd_type = 'psd-model'
+elif cp.has_option('common', 'asd-file'):
+    psd_type = 'asd-file'
+else:
+    raise ValueError('please provide a psd-model or an asd-file in [common]')
+
+# randomize distances
+add_opts_from_ini(cp, 'randomize_distances', randDists_job)
+# set common options; we only need some of the ones from [common]
+common_opts = [psd_type, 'waveform-f-min', 'overlap-f-min'] 
+for opt in common_opts:
+    randDists_job.add_opt(opt, cp.get('common', opt))
+if cp.has_option('common', 'ifo'):
+    randDists_job.add_opt('ifo', cp.get('common', 'ifo'))
+randDists_job.add_opt('tmp-space', opts.node_local_dir)
+
+# expectation values
+add_opts_from_ini(cp, 'calc_exval', exval_job)
+# add all arguments from common section
+add_opts_from_ini(cp, 'common', exval_job)
+exval_job.add_opt('tmp-space', opts.node_local_dir)
+exval_job.add_opt('output-dir', results_dir)
+
+#
+#
+#       Write nodes
+#
+#
+
+# We will break the dag up by having one job per input overlaps database 
+print "Creating threads..."
+exval_nodes = []
+num_dbs = len(overlap_databases)
+for nn,this_db in enumerate(overlap_databases):
+
+    print "%i / %i\r" %(nn+1, num_dbs),
+    sys.stdout.flush()
+
+    thread_tag = '%s%i' %(opts.user_tag is not None and opts.user_tag+'-' or \
+        '', nn)
+
+    # We'll make the output database file names be the save as the overlaps,
+    # but with 'OVERLAPS' replaced with 'RANDR_BY_SNR'
+    randr_outfile = '%s/%s' %(results_dir,
+        os.path.basename(this_db).replace('OVERLAPS', 'RANDR_BY_SNR'))
+
+    # FIXME: randr_by_snr should really write out its own outfiles
+    # copy the database over
+    overlap_utils.copy_to_output(this_db, randr_outfile)
+
+    #
+    #   Create node to randomize the distances
+    #
+    randDists_node = pipeline.CondorDAGNode(randDists_job)
+    randDists_node.add_var_opt('seed', seed)
+    seed += 1
+    # FIXME
+    randDists_node.add_file_arg(randr_outfile)
+    randDists_node.add_output_file(randr_outfile)
+    randDists_node.set_category('randomize_distance')
+    dag.add_node(randDists_node)
+    last_node = randDists_node
+
+    #
+    #   Create node to calculate the expectation values
+    #
+    exval_node = pipeline.CondorDAGNode(exval_job)
+    exval_node.add_var_opt('seed', seed)
+    seed += 1
+    this_tag = '%i%s%s' %(seed, opts.user_tag is None and '-' or '_',
+        thread_tag)
+    exval_node.add_var_opt('user-tag', this_tag)
+    exval_node.add_file_arg(randr_outfile)
+    outfile = overlap_utils.get_exval_outfilename(results_dir, ifo,
+        user_tag=this_tag, num=0)
+    exval_node.add_output_file(outfile)
+    # remove outfile if it already exists
+    if os.path.exists(outfile):
+        warnings.warn('Deleting %s' % outfile)
+        os.remove(outfile)
+    exval_node.add_parent(last_node)
+    exval_node.set_category('calc_exval')
+    dag.add_node(exval_node)
+    exval_nodes.append(exval_node)
+print ""
+
+#
+#   Create a cache of all output files
+#
+print "Writing cache files..."
+f = open(opts.config_file.replace('.ini', '')+'.cache', 'w')
+for outfile in set([outf for node in dag.get_nodes() for outf in \
+        node.get_output_files()]):
+    print >> f, "%s" % os.path.abspath(outfile)
+f.close()
+# creaete a second cache of all result databases
+f = open(opts.config_file.replace('.ini', '')+'-results.cache', 'w')
+for outfile in [outf for node in exval_nodes for outf in \
+        node.get_output_files()]:
+    print >> f, "%s" % os.path.abspath(outfile)
+f.close()
+
+#
+#   Write DAG
+#
+print "Writing dag..."
+# set max jobs
+if cp.has_option('pipeline', 'max-other-jobs'):
+    dag.add_maxjobs_category('randomize_distance', int(cp.get('pipeline',
+        'max-other-jobs')))
+    dag.add_maxjobs_category('calc_exval', int(cp.get('pipeline',
+        'max-other-jobs')))
+
+dag.write_sub_files()
+dag.write_dag()
+
+# remove the temporary files
+tempoutf.close()
+os.remove(tempout)
+
+print "Finished!"
+
+sys.exit(0)

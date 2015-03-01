@@ -1536,6 +1536,9 @@ class InjectionDict(dict):
         'numrel_mode_max': 'spin_order'
     }
 
+    inv_sim_inspiral_map = dict([[_v,_k] \
+        for _k,_v in sim_inspiral_map.items()])
+
     def __init__(self):
         self._sort_key = None
         self._as_list = None
