@@ -545,13 +545,29 @@ class Waveform(object):
         return self._f_final 
 
     @property
-    def min_sample_rate(self):
+    def min_sample_rate(self, extra_factor_threshold=4096):
         """
-        Returns twice the nearest power of 2 to twice f_final.
+        Returns 4 times the nearest power of 2 to f_final. This
+        will be approximately twice Nyquist; the extra power of 2 is used
+        to protect against aliasing for waveforms that have an f_final close
+        to a power of 2.
+
         If _f_final is not set, an error is raised.
+
+        Parameters
+        ----------
+        extra_factor_threshold: {4096 | int}
+            If the calculated sample rate > extra_factor_threshold, use 2
+            times the nearest power of 2 of f_final, instead of 4. This runs
+            the risk of losing some power for waveforms that have f_finals
+            close to the extra_factor_threshold/2, but if this set high enough,
+            this is not a concern. Default is 4096.
         """
         try:
-            return int(2**(numpy.ceil(numpy.log2(self._f_final)+2)))
+            sr = int(2**(numpy.ceil(numpy.log2(self._f_final)+2)))
+            if sr > extra_factor_threshold:
+                sr /= 2
+            return sr
         except AttributeError:
             raise ValueError("f_final not set")
 
