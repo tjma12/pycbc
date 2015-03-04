@@ -463,8 +463,9 @@ for fnum, infile in enumerate(filenames):
                 # Although we will eventually 0-pad in the FD to get a common
                 # sample rate, we need to know what this common rate is for
                 # PSD generation.
-                sample_rate = min(int(2**(numpy.ceil(numpy.log2(
-                    max(tmplt.f_final, inj.f_final))+1))), target_sample_rate)
+                sample_rate = min(
+                    max(tmplt.min_sample_rate, inj.min_sample_rate),
+                    target_sample_rate)
 
                 # since the duration estimates are based on the 2PN
                 # approximation, the duration may be too short; we'll just put
@@ -488,7 +489,8 @@ for fnum, infile in enumerate(filenames):
                         # TD waveform, zero-pad (or generate then zero-pad, if
                         # this is the first instance)
                         if h is None:
-                            h = tmplt.get_td_waveform(sample_rate,
+                            h = tmplt.get_td_waveform(
+                                min(tmplt.min_sample_rate, target_sample_rate),
                                 tmplt.min_seg_length, store=False,
                                 reposition=True, resample_from_max=True)
                         # Because we sorted the injections by increasing
@@ -497,11 +499,13 @@ for fnum, infile in enumerate(filenames):
                         # the size of h, it never decreases.
                         pad_idx = int(tmplt.get_wraparound_dur() / h.delta_t)
                         h = waveform_utils.zero_pad_at_index(h, pad_idx,
-                            tmplt.min_sample_rate*seg_length)
+                            min(tmplt.min_sample_rate, target_sample_rate)*\
+                            seg_length)
                         htilde = filter.make_frequency_series(h)
                     else:
                         # FD waveform, just have to regenerate
-                        htilde = tmplt.get_fd_waveform(tmplt.min_sample_rate,
+                        htilde = tmplt.get_fd_waveform(
+                            min(tmplt.min_sample_rate, target_sample_rate),
                             seg_length, store=False, resample_from_max=True)
                     htilde = htilde * dyn_range_fac
                     htilde = htilde.astype(cmplx_type)
@@ -520,7 +524,8 @@ for fnum, infile in enumerate(filenames):
                         segment_start, 'FD', del_unsegmented=False)
                     last_inj_seg_lengths[inj.simulation_id] = seg_length
                 # now get/create the injection
-                htildeprime = inj.get_fd_waveform(sample_rate,
+                htildeprime = inj.get_fd_waveform(
+                    min(inj.min_sample_rate, target_sample_rate),
                     seg_length, ifo, segment_start,
                     store=opts.use_injection_cache is not None,
                     store_td=opts.use_injection_cache is not None,

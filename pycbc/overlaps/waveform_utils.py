@@ -547,11 +547,11 @@ class Waveform(object):
     @property
     def min_sample_rate(self):
         """
-        Returns the nearest power of 2 to twice f_final.
+        Returns twice the nearest power of 2 to twice f_final.
         If _f_final is not set, an error is raised.
         """
         try:
-            return int(2**(numpy.ceil(numpy.log2(self._f_final)+1)))
+            return int(2**(numpy.ceil(numpy.log2(self._f_final)+2)))
         except AttributeError:
             raise ValueError("f_final not set")
 

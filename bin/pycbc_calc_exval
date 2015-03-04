@@ -225,9 +225,9 @@ for fnum, infile in enumerate(filenames):
 
         # get the sample rate and segment length to use
         if opts.vary_n:
-            target_sample_rate = opts.sample_rate
-            sample_rate = min(int(2**(numpy.ceil(numpy.log2(
-                max(tmplt.f_final, inj.f_final))+1))), target_sample_rate)
+            sample_rate = min(
+                max(tmplt.min_sample_rate, inj.min_sample_rate),
+                target_sample_rate)
 
             # get the segment length to use
             # we'll set the segment length to be four times the max duration
