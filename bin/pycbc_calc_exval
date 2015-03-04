@@ -46,7 +46,7 @@ parser.add_option('-r', '--sample-rate', type = 'int', help = "Required. Sample 
 parser.add_option('-l', '--segment-length', type = 'int', help = "Segment length to use (in s). Must be a power of 2. Required if vary-n not used.")
 parser.add_option('-N', '--vary-n', action='store_true', default=False, help='If turned on, the sample rate and segment length used will be set to the smallest possible value between a given template and injection pair.')
 parser.add_option('-n', '--n-realizations', type = 'int', help = "Number of noise realizations to generate to calculate the mean snr, chisq, and new-snr.")
-parser.add_option('-i', '--ifo', help = "What ifo to inject into. If none specified, no response function will be applied to the injections.")
+parser.add_option('-i', '--ifo', metavar='IFO1[,IFO2,...]', help="What ifo(s) to inject into. If none specified, no response function will be applied to the injections. If multiple specified, combined new snr, snr, and chisq will be calculated and stored, with the single detector results saved to their own table. No coincidence window is used: two injections are counted as coincident as long as they create triggers in a realization that have SNRs > than the loudest trigger in the same realization without injections, regardless of the time difference between the triggers. Note that the same PSD is used for all the ifos.")
 parser.add_option('-U', '--user-tag', help = "User tag to add to all output files.")
 parser.add_option('-a', '--approximant', help = "Approximant to use for the templates.")
 parser.add_option("", "--amp-order", type=int, default=0, help="Amplitude order to use for templates. Default is 0.")
@@ -71,11 +71,21 @@ if opts.checkpoint_dt < opts.checkpoint_window:
 checkpoint_dt = opts.checkpoint_dt + \
     numpy.random.uniform(-opts.checkpoint_window, opts.checkpoint_window)
 
-ifo = opts.ifo
+ifos = []
 if opts.ifo is not None:
-    ifo = ifo.upper()
-    if len(ifo) != 2:
-        raise ValueError("--ifo must be of format [site][number], e.g., 'H1'")
+    for ifo in opts.ifo.split(','):
+        ifo = ifo.upper()
+        if len(ifo) != 2:
+            raise ValueError("--ifo must be of format {site}{number}[,etc.], "+
+                "e.g., 'H1[,L1]'; see help")
+        ifos.append(ifo)
+else:
+    ifos = [None]
+
+# we'll add an additional table to store single ifo info
+# if there is more than one ifo
+if len(ifos) > 1:
+    sngl_table_name = 'sngl_ifo_overlap_results'
 wfmin = opts.waveform_f_min
 ofmin = opts.overlap_f_min
 if ofmin < wfmin:
@@ -180,9 +190,15 @@ for fnum, infile in enumerate(filenames):
     # results table, since we'll next create one if it doesn't exist
     if opts.overwrite_results:
         connection.cursor().execute('DROP TABLE IF EXISTS overlap_results') 
+        if len(ifos) > 1:
+            connection.cursor().execute(
+                'DROP TABLE IF EXISTS %s' % sngl_ifo_table)
 
     # create the overlap results table if it doesn't exist yet 
     overlap_utils.create_results_table(connection)
+    # also create a sngl_ifo_overlap_results table if we have more than 1 ifo
+    if len(ifos) > 1:
+        overlap_utils.create_results_table(connection, sngl_ifo_table)
 
     # get results that have already been analyzed: these are results
     # where the snr, chisq and new_snr are filled in
@@ -252,119 +268,171 @@ for fnum, infile in enumerate(filenames):
         htildeprime = inj.get_fd_waveform(sample_rate, seg_length,
             ifo, segment_start, store=opts.use_waveform_cache is not None,
             resample_from_max=opts.vary_n)
+
+        # get the template waveform
         htilde = tmplt.get_fd_waveform(sample_rate, seg_length,
             store=opts.use_waveform_cache is not None,
             resample_from_max=opts.vary_n)
 
-        # get psd and needed workspace vectors
-        if opts.asd_file is not None:
-            psd = work_space.get_psd_from_file(wfmin, sample_rate,
-                seg_length, opts.asd_file, dyn_range_exp=0)
-        else:
-            psd = work_space.get_psd(wfmin, sample_rate, seg_length,
-                psd_model, dyn_range_exp=0)
+        sngl_snrs = {}
+        sngl_chisq_vals = {}
+        sngl_newsnrs = {}
+        sngl_success_idx = {}
+        for ifo in ifos:
+            # set the segment start time; we'll always make this to be
+            # the injection's end_time - 2.5 times its estimated duration
+            segment_start = inj.detector_end_time(ifo) - 2.5*inj.duration
 
-        # we'll need a place to store work space vectors;
-        # note that the length of these are set to the
-        # target_sample_rate * the segment length
-        N = target_sample_rate * seg_length
-        kmax = N/2+1
-        snr_work_mem = pytypes.zeros(N,
-            dtype=pytypes.complex_same_precision_as(htilde))
-        corr_work_mem = pytypes.zeros(N,
-            dtype=pytypes.complex_same_precision_as(htilde))
-        work_htilde = pytypes.FrequencySeries(pytypes.zeros(kmax,
-            dtype=pytypes.complex_same_precision_as(htilde)),
-            delta_f=htilde.delta_f)
-        work_stilde = pytypes.FrequencySeries(pytypes.zeros(kmax,
-            dtype=pytypes.complex_same_precision_as(htildeprime)),
-            delta_f=htildeprime.delta_f)
-        work_psd = pytypes.FrequencySeries(pytypes.ones(kmax,
-            dtype=pytypes.real_same_precision_as(psd)),
-            delta_f=psd.delta_f)
+            # get the FD injection and waveform
+            # Note that these will also store the TD versions if they don't
+            # exist in the archive
+            htildeprime = inj.get_fd_waveform(sample_rate, seg_length,
+                ifo, segment_start, store=opts.use_waveform_cache is not None)
 
-        # get the chisq bins
-        chisq_bins = vetoes.power_chisq_bins(htilde, opts.n_chisq_bins, psd,
-            ofmin)
-
-        # compute the effectualness. We do this using filter_by_padding. If
-        # the sample_rate is equal to the target_sample_rate, than this
-        # will essentially just call filter.matched_filter_core.
-        cmplx_ts, corr, norm = overlap_utils.filter_by_padding(htilde,
-            htildeprime, psd, ofmin, target_sample_rate, work_v1=work_htilde,
-            work_v2=work_stilde, work_psd=work_psd, out=snr_work_mem,
-            corr_out=corr_work_mem)
-        # normalize and drop the first and last quarter of the time series;
-        # we don't really need to drop the first and last quarter for this,
-        # it will just speed up calculations later on when computing the snr
-        # in noise
-        cmplx_ts = cmplx_ts[N/4:3*N/4]*norm
-        sigmaprime = filter.sigma(htildeprime, psd, ofmin)
-
-        maxidx = abs(cmplx_ts).data.argmax()
-        effectualness = abs(cmplx_ts[maxidx])/sigmaprime
-        offset = (maxidx + N/4) * cmplx_ts.delta_t
-
-        time_offset = segment_start + offset - inj.geocent_time
-
-        # cycle over the desired number of sample times, calculating snr,
-        # chisq, and newsnr for each
-        snrs = []
-        chisq_vals = []
-        newsnrs = []
-        num_successes = 0
-        for nn in range(opts.n_realizations):
-            # create an instance of the noise
-            # pycbc's noise package will give the same noise if you pass the
-            # seed argument everytime. We therefore only pass it a seed on
-            # the first pass.
-            if nn == 0:
-                seed = opts.seed
+            # get psd and needed workspace vectors
+            if opts.asd_file is not None:
+                psd = work_space.get_psd_from_file(wfmin, sample_rate,
+                    seg_length, opts.asd_file, dyn_range_exp=0)
             else:
-                seed = None
-            ntilde = noise.frequency_noise_from_psd(psd, seed=seed)
+                psd = work_space.get_psd(wfmin, sample_rate, seg_length,
+                    psd_model, dyn_range_exp=0)
 
-            # check what the loudest event in noise is
+            # we'll need a place to store work space vectors;
+            # note that the length of these are set to the
+            # target_sample_rate * the segment length
+            N = target_sample_rate * seg_length
+            kmax = N/2+1
             snr_work_mem = pytypes.zeros(N,
                 dtype=pytypes.complex_same_precision_as(htilde))
             corr_work_mem = pytypes.zeros(N,
                 dtype=pytypes.complex_same_precision_as(htilde))
-            rand_ts, rand_corr, rand_norm = overlap_utils.filter_by_padding(
-                htilde, ntilde, psd, ofmin, target_sample_rate,
-                work_v1=work_htilde, work_v2=work_stilde, work_psd=work_psd, 
+            work_htilde = pytypes.FrequencySeries(pytypes.zeros(kmax,
+                dtype=pytypes.complex_same_precision_as(htilde)),
+                delta_f=htilde.delta_f)
+            work_stilde = pytypes.FrequencySeries(pytypes.zeros(kmax,
+                dtype=pytypes.complex_same_precision_as(htildeprime)),
+                delta_f=htildeprime.delta_f)
+            work_psd = pytypes.FrequencySeries(pytypes.ones(kmax,
+                dtype=pytypes.real_same_precision_as(psd)),
+                delta_f=psd.delta_f)
+
+            # get the chisq bins
+            chisq_bins = vetoes.power_chisq_bins(htilde, opts.n_chisq_bins,
+                psd, ofmin)
+
+            # compute the SNR. We do this using filter_by_padding. If
+            # the sample_rate is equal to the target_sample_rate, than this
+            # will essentially just call filter.matched_filter_core.
+            cmplx_ts, corr, norm = overlap_utils.filter_by_padding(htilde,
+                htildeprime, psd, ofmin, target_sample_rate,
+                work_v1=work_htilde, work_v2=work_stilde, work_psd=work_psd,
                 out=snr_work_mem, corr_out=corr_work_mem)
+            # normalize and drop the first and last quarter of the time series;
+            # we don't really need to drop the first and last quarter for this,
+            # it will just speed up calculations later on when computing the
+            # snr in noise
+            cmplx_ts = cmplx_ts[N/4:3*N/4]*norm
+            sigmaprime = filter.sigma(htildeprime, psd, ofmin)
 
-            # Note: norm and rand_norm should be the same, so we'll just use
-            # norm for the normalization
-            rand_ts = rand_ts[N/4:3*N/4] * norm
-            randsnr = abs(rand_ts).max()
+            maxidx = abs(cmplx_ts).data.argmax()
+            effectualness = abs(cmplx_ts[maxidx])/sigmaprime
+            offset = (maxidx + N/4) * cmplx_ts.delta_t
+
+            time_offset = segment_start + offset - inj.geocent_time
+
+            # cycle over the desired number of sample times, calculating snr,
+            # chisq, and newsnr for each
+            sngl_snrs[ifo] = numpy.zeros(opts.n_realizations)
+            sngl_chisq_vals[ifo] = numpy.zeros(opts.n_realizations)
+            sngl_newsnrs[ifo] = numpy.zeros(opts.n_realizations)
+            sngl_success_idx[ifo] = numpy.array([])
+            for nn in range(opts.n_realizations):
+                # create an instance of the noise
+                # pycbc's noise package will give the same noise if you pass
+                # the seed argument everytime. We therefore only pass it a
+                # seed on the first pass.
+                if nn == 0:
+                    seed = opts.seed
+                else:
+                    seed = None
+                ntilde = noise.frequency_noise_from_psd(psd, seed=seed)
+
+                # check what the loudest event in noise is
+                snr_work_mem = pytypes.zeros(N,
+                    dtype=pytypes.complex_same_precision_as(htilde))
+                corr_work_mem = pytypes.zeros(N,
+                    dtype=pytypes.complex_same_precision_as(htilde))
+                rand_ts, rand_corr, rand_norm = \
+                    overlap_utils.filter_by_padding(
+                        htilde, ntilde, psd, ofmin, target_sample_rate,
+                        work_v1=work_htilde, work_v2=work_stilde,
+                        work_psd=work_psd, out=snr_work_mem,
+                        corr_out=corr_work_mem)
+
+                # Note: norm and rand_norm should be the same, so we'll just
+                # use norm for the normalization
+                rand_ts = rand_ts[N/4:3*N/4] * norm
+                randsnr = abs(rand_ts).max()
 
 
-            # the total snr is the sum of the complex time series from the
-            # noise and from the injection
-            rand_ts._epoch = cmplx_ts._epoch
-            snr_ts = cmplx_ts + rand_ts
-            maxidx = abs(snr_ts).data.argmax()
-            snr = abs(snr_ts[maxidx])
+                # the total snr is the sum of the complex time series from the
+                # noise and from the injection
+                rand_ts._epoch = cmplx_ts._epoch
+                snr_ts = cmplx_ts + rand_ts
+                maxidx = abs(snr_ts).data.argmax()
+                snr = abs(snr_ts[maxidx])
 
-            # only calculate chisq if the snr is louder than noise
-            if snr > randsnr:
-                # the corr to use is just the rand_corr + the injection corr
-                chisq_corr = rand_corr + corr
-                # Note: the indx of the maximum has to be with respect to
-                # the full time series, not to the cropped time series
-                chisq_indx = pytypes.Array(numpy.array([maxidx+N/4]))
-                chisq = vetoes.power_chisq_at_points_from_precomputed(
-                    chisq_corr, pytypes.Array(numpy.array([snr/norm])),
-                    norm, chisq_bins, chisq_indx)[0]
+                # only calculate chisq if the snr is louder than noise
+                if snr > randsnr:
+                    # the corr to use is just rand_corr + injection corr
+                    chisq_corr = rand_corr + corr
+                    # Note: the indx of the maximum has to be with respect to
+                    # the full time series, not to the cropped time series
+                    chisq_indx = pytypes.Array(numpy.array([maxidx+N/4]))
+                    chisq = vetoes.power_chisq_at_points_from_precomputed(
+                        chisq_corr, pytypes.Array(numpy.array([snr/norm])),
+                        norm, chisq_bins, chisq_indx)[0]
 
-                newsnr = overlap_utils.new_snr(snr, chisq,
-                    2*opts.n_chisq_bins-2)
+                    newsnr = overlap_utils.new_snr(snr, chisq,
+                        2*opts.n_chisq_bins-2)
 
-                snrs.append(snr)
-                chisq_vals.append(chisq)
-                newsnrs.append(newsnr)
-                num_successes += 1
+                    sngl_snrs[ifo][nn] = snr
+                    sngl_chisq_vals[ifo][nn] = chisq
+                    sngl_newsnrs[ifo][nn] = newsnr
+                    numpy.append(sngl_success_idx[ifo], nn)
+
+
+        # get coincident results
+        if len(ifos) > 1:
+            snrs = numpy.zeros(opts.n_realizations)
+            chisq_vals = numpy.zeros(opts.n_realizations)
+            newsnrs = numpy.zeros(opts.n_realizations)
+            success_indices = numpy.array([])
+            for nn in range(opts.n_realizations):
+                # apply coincidence: need at least two detectors to have
+                # non-zero snrs
+                coinc_ifos = [ifo for ifo in ifos if sngl_snrs[ifo][nn] != 0]
+                if len(coinc_ifos) > 1:
+                    # we'll do the quadrature sum of new snr, snr; for chisq,
+                    # we'll just take the mean (I guess; we don't actually
+                    # find coincident chisq in the real search
+                    coinc_snrs = numpy.array([sngl_snrs[ifo][nn]
+                        for ifo in coinc_ifos])
+                    coinc_new_snrs = numpy.array([sngl_newsnrs[ifo][nn]
+                        for ifo in coinc_ifos])
+                    coinc_chisq_vals = numpy.array([sngl_chisq_vals[ifo][nn]
+                        for ifo in coinc_ifos])
+                    snrs[nn] = numpy.sqrt((coinc_snrs**2.).sum())
+                    newsnrs[nn] = numpy.sqrt((coinc_newsnrs**2.).sum())
+                    chisq_vals[nn] = coinc_chisq_vals.mean()
+                    numpy.append(success_indices, nn)
+        else:
+            # for single ifo, just store the values
+            snrs = sngl_snrs[ifos[0]]
+            newsnrs = sngl_newsnrs[ifos[0]]
+            chisq_vals = sngl_chisq_vals[ifos[0]]
+            success_indices = sngl_success_idx[ifos[0]] 
+
 
         # store the results
         this_result = overlap_utils.OverlapResult(tmplt, inj)
@@ -376,33 +444,46 @@ for fnum, infile in enumerate(filenames):
         this_result.effectualness = effectualness
         this_result.time_offset = time_offset.gpsSeconds
         this_result.time_offset_ns = time_offset.gpsNanoSeconds
-
-        # compute mean, st. devs.
-        if num_successes > 0:
-            snrs = numpy.array(snrs)
-            chisq_vals = numpy.array(chisq_vals)
-            newsnrs = numpy.array(newsnrs)
-            this_result.snr = snrs.mean()
-            this_result.snr_std = snrs.std()
-            this_result.chisq = chisq_vals.mean()
-            this_result.chisq_std = chisq_vals.std()
-            this_result.chisq_dof = 2*opts.n_chisq_bins - 2
-            this_result.new_snr = newsnrs.mean()
-            this_result.new_snr_std = newsnrs.std()
-        else:
-            this_result.snr = 0
-            this_result.snr_std = 0
-            this_result.chisq = 0
-            this_result.chisq_std = 0
-            this_result.chisq_dof = 0
-            this_result.new_snr = 0
-            this_result.new_snr_std = 0
-
+        if ifos != [None]:
+            this_result.ifo = ','.join(sorted(ifos))
+        # we'll only take the average over the successful attempts 
+        this_result.snr = snrs[success_indices].mean()
+        this_result.snr_std = snrs[success_indices].std()
+        this_result.chisq = chisq_vals[success_indices].mean()
+        this_result.chisq_std = chisq_vals[success_indices].std()
+        this_result.chisq_dof = 2*opts.n_chisq_bins - 2
+        this_result.new_snr = newsnrs[success_indices].mean()
+        this_result.new_snr_std = newsnrs[success_indices].std()
         this_result.num_tries = opts.n_realizations
-        this_result.num_successes = num_successes
+        this_result.num_successes = success_indices.shape[0]
 
         # dump to output database
         this_result.write_to_database(connection, ceid)
+
+        # add the single ifo info if we have more than one ifo
+        if len(ifos) > 1:
+            for ifo in ifos:
+                this_result = overlap_utils.OverlapResult(tmplt, inj)
+                this_result.ifo = ifo 
+                this_result.segment_length = seg_length
+                this_result.sample_rate = int(1./cmplx_ts.delta_t)
+                this_result.overlap_f_min = ofmin 
+                this_result.waveform_f_min = wfmin
+                this_result.tmplt_approximant = opts.approximant 
+                this_result.effectualness = effectualness
+                this_result.time_offset = time_offset.gpsSeconds
+                this_result.time_offset_ns = time_offset.gpsNanoSeconds
+                keep_idx = sngl_success_idx[ifo]
+                this_result.snr = sngl_snrs[ifo][keep_idx].mean()
+                this_result.snr_std = sngl_snrs[ifo][keep_idx].std()
+                this_result.chisq = sngl_chisq_vals[ifo][keep_idx].mean()
+                this_result.chisq_std = sngl_chisq_vals[ifo][keep_idx].std()
+                this_result.chisq_dof = 2*opts.n_chisq_bins - 2
+                this_result.new_snr = sngl_newsnrs[ifo][keep_idx].mean()
+                this_result.new_snr_std = sngl_newsnrs[ifo][keep_idx].std()
+                this_result.num_tries = opts.n_realizations
+                this_result.num_successes = keep_idx.shape[0]
+                this_result.write_to_database(connection, ceid, sngl_ifo_table)
 
         connection.commit()
 

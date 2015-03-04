@@ -1118,8 +1118,7 @@ class TemplateDict(dict):
     def get_templates(self, connection, approximant, f_min, amp_order=None,
             phase_order=None, spin_order=None, taper=None, archive=None,
             calc_f_final=True, max_f_final=numpy.inf, estimate_dur=True,
-            verbose=False,
-            only_matching=False):
+            verbose=False, only_matching=False, get_weights=False):
         if verbose:
             print >> sys.stdout, "getting templates from database"
         self.clear()
@@ -1155,6 +1154,23 @@ class TemplateDict(dict):
                 tmplt.set_archive_id()
             # add to self
             self[tmplt.tmplt_id] = tmplt
+
+        # get the weights if desired
+        if get_weights:
+            try:
+                sqlquery = """
+                    SELECT
+                        tmplt_id, weight_function, weight
+                    FROM
+                        tmplt_weights
+                    """
+                for tmplt_id, weight_func, weight in \
+                        connection.cursor().execute(sqlquery):
+                    self[tmplt_id].weights[weight_func] = weight
+            except sqlite3.OperationalError:
+                raise ValueError("I can't get template weights; there is no " +
+                    "tmplt_weights table in the database")
+
 
     def clear_sigmas(self):
         """

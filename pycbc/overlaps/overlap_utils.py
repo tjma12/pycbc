@@ -1013,7 +1013,8 @@ class OverlapResult:
         return self.injection.detector_end_time(self.ifo) + \
             lal.LIGOTimeGPS(self.time_offset, self.time_offset_ns)
 
-    def write_to_database(self, connection, coinc_event_id):
+    def write_to_database(self, connection, coinc_event_id,
+            table_name='overlap_results'):
         write_params = [param for param in self.params if param in dir(self)]
         sqlquery = """
             INSERT INTO
@@ -1249,14 +1250,14 @@ def create_all_results_table(connection):
     connection.cursor().executescript(sqlquery)
 
 
-def create_results_table(connection):
+def create_results_table(connection, table_name='overlap_results'):
     sqlquery = ''.join(["""
         CREATE TABLE IF NOT EXISTS
-            overlap_results (coinc_event_id PRIMARY KEY, """,
+            %s (coinc_event_id PRIMARY KEY, """ %(table_name),
             ', '.join(OverlapResult.params), """);
         CREATE INDEX IF NOT EXISTS
-            or_ceid_idx ON overlap_results (coinc_event_id);
-        """])
+            or_ceid_idx ON %s (coinc_event_id);""" %(table_name)
+        ])
     connection.cursor().executescript(sqlquery)
 
 
