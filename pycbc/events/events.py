@@ -159,6 +159,7 @@ class EventManager(object):
         for column, coltype in zip (column, column_types):
             self.event_dtype.append( (column, coltype) )
 
+        self.all_events = []
         self.events = numpy.events = numpy.array([], dtype=self.event_dtype)
         self.template_params = []
         self.template_index = -1
@@ -276,8 +277,11 @@ class EventManager(object):
         self.template_params[-1].update(kwds)
 
     def finalize_template_events(self):
-        self.events = numpy.append(self.events, self.template_events)
+        self.all_events += [self.template_events]
         self.template_events = numpy.array([], dtype=self.event_dtype)
+
+    def finalize_events(self):
+        self.events = numpy.concatenate(self.all_events)
 
     def write_events(self, outname):
         """ Write the found events to a sngl inspiral table
