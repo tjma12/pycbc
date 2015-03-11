@@ -81,7 +81,7 @@ parser.add_argument("--user-tag", type=str, metavar="TAG", help="""
                     This is used to identify FULL_DATA jobs for 
                     compatibility with pipedown post-processing. 
                     Option will be removed when no longer needed.""")
-
+parser.add_argument("--gpu-callback-method", default='none')
 # Add options groups
 psd.insert_psd_option_group(parser)
 strain.insert_strain_option_group(parser)
@@ -127,7 +127,8 @@ with ctx:
                                    opt.snr_threshold, tlen, delta_f, complex64,
                                    downsample_factor=opt.downsample_factor,
                                    upsample_threshold=opt.upsample_threshold,
-                                   upsample_method=opt.upsample_method)
+                                   upsample_method=opt.upsample_method,
+                                   gpu_callback_method=opt.gpu_callback_method)
 
     bank_chisq = vetoes.SingleDetBankVeto(opt.bank_veto_bank_file,
                                           opt.approximant, flen, delta_f, flow,
