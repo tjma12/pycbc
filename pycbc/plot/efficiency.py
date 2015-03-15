@@ -54,7 +54,7 @@ def mathjax_html_header():
     """
     return """
 <script type="text/x-mathjax-config">
-  MathJax.Hub.Config({tex2jax: {inlineMath: [['$','$'], ['\\(','\\)']]}});
+  MathJax.Hub.Config({tex2jax: {inlineMath: [['$','$']]}});
 </script>
 <script type="text/javascript"
     src="//cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
@@ -263,10 +263,8 @@ class PHyperCube:
                     "see set_ranking_params()")
             if self.use_distance_bins:
                 volume, err_high, err_low = self._old_integrate_efficiencies(
-                    self._ranking_stat, self._rank_by, threshold)
-                volume /= 2.26**3.
-                err_high /= 2.26**3.
-                err_low /= 2.26**3.
+                    self._ranking_stat, self._rank_by, threshold,
+                    astro_prior=self.astro_prior)
             else:
                 volume, err_high = self._integrate_efficiency(threshold,
                     self._ranking_stat, self._rank_by, self.astro_prior)
@@ -293,12 +291,13 @@ class PHyperCube:
                 "compute efficiency")
         integrand = numpy.array([x.inj_min_vol + x.inj_weight * \
             float(_isfound(x, ranking_stat, compare_operator, threshold)) \
-            for x in self.data])
+            for x in self.data if x.inj_weight is not None])
         if astro_prior is not None:
             # apply the appropriate astrophysical prior
             # FIXME: this currently only works on masses
             weights = numpy.array([distributions.convert_distribution(
-                x, x.inj_mass_distr, astro_prior) for x in self.data])
+                x, x.inj_mass_distr, astro_prior) for x in self.data
+                if x.inj_weight is not None])
             integrand *= weights / weights.mean()
         elif self.total_num_inj is not None:
             # correct for the number of injections in this tile
@@ -324,7 +323,7 @@ class PHyperCube:
 
 
     def _old_calculate_efficiencies(self, ranking_stat, rank_by, threshold,
-            nbins=20, d_distr='linear'):
+            nbins=20, d_distr='linear', astro_prior=None):
         if rank_by == 'max':
             compare_operator = operator.ge
         elif rank_by == 'min':
@@ -333,6 +332,13 @@ class PHyperCube:
             raise ValueError("unrecognized rank_by argument %s; " %(rank_by) +\
                 "options are 'max' or 'min'")
         distances = numpy.array([x.distance for x in self.data])
+
+        weights = numpy.array([x.inj_weight for x in self.data])
+        integrand = numpy.array([\
+            float(_isfound(x, ranking_stat, compare_operator, threshold)) \
+            for x in self.data])
+        integrand *= weights
+
         min_dist = distances.min()
         max_dist = distances.max()
         if d_distr == 'log10':
@@ -346,19 +352,24 @@ class PHyperCube:
         dist_bins[-1] *= 1.01
 
         # calculate the average efficiency in each distance bin
-        numFound = numpy.zeros(len(dist_bins)-1)
+        thisEff = numpy.zeros(len(dist_bins)-1)
         numTotal = numpy.zeros(len(dist_bins)-1)
         for kk,dbin in enumerate(dist_bins[:-1]):
             nextbin = dist_bins[kk+1]
             group_idx = numpy.intersect1d(
                 numpy.where(distances >= dbin)[0],
                 numpy.where(distances < nextbin)[0])
-            found_or_missed = numpy.array([_isfound(self.data[idx],
-                ranking_stat, compare_operator, threshold) for idx in \
-                group_idx])
-            numFound[kk] = float(len(numpy.where(found_or_missed)[0]))
-            numTotal[kk] = float(len(found_or_missed))
+            numTotal[kk] = len(group_idx)
+            if len(group_idx) == 0:
+                continue
+            this_integrand = integrand[group_idx]
+            if astro_prior is not None:
+                these_weights = weights[group_idx]
+                this_integrand = this_integrand * these_weights / \
+                    these_weights.mean()
+            thisEff[kk] = this_integrand.mean() / weights[group_idx].mean()
 
+        numFound = thisEff * numTotal
         numMissed = numTotal - numFound
         # if some bins have no injections in them
         # we'll combine with adjacent bins
@@ -366,10 +377,9 @@ class PHyperCube:
         numTotal = numTotal[nzidx]
         numFound = numFound[nzidx]
         numMissed = numMissed[nzidx]
+        thisEff = thisEff[nzidx]
         dist_bins = numpy.array(dist_bins[nzidx].tolist() + \
             [dist_bins[-1]])
-
-        thisEff = numFound / numTotal
 
         use_frequentist_ci = True
         if use_frequentist_ci:
@@ -393,16 +403,19 @@ class PHyperCube:
 
 
     def _old_integrate_efficiencies(self, ranking_stat, rank_by, threshold,
-            nbins=20, d_distr='linear'):
+            nbins=20, d_distr='linear', astro_prior=None):
 
         # calculate the efficiency
         efficiencies, eff_err_high, eff_err_low, distances = \
             self._old_calculate_efficiencies(ranking_stat, rank_by, threshold,
-            nbins, d_distr)
+            nbins, d_distr, astro_prior)
         # now integrate
         if d_distr == 'linear':
             this_dist = distances[:-1] + numpy.diff(distances)/2.
             dr = numpy.diff(distances)
+            #integrated_eff = 4*numpy.pi*(
+            #    efficiencies * dr).sum() + \
+            #    (4./3)*numpy.pi*distances[0]**3
             integrated_eff = 4*numpy.pi*(
                 efficiencies * this_dist**2 * dr).sum() + \
                 (4./3)*numpy.pi*distances[0]**3
@@ -910,6 +923,9 @@ def _create_gain_html_page(phyper_cube, out_dir, html_name, threshold=None,
     print >> f, "<h2>"
     print >> f, "Total number of injections: %i<br />" %(
         phyper_cube.nsamples)
+    if phyper_cube.reference_cube.astro_prior is not None:
+        print >> f, "Astrophysical prior: %s<br />" %(
+            phyper_cube.reference_cube.astro_prior.description)
     if phyper_cube.nsamples > 1:
         V, err, err_minus = phyper_cube.test_cube.get_volume(threshold)
         stat_label = phyper_cube.test_cube.stat_label
@@ -932,7 +948,6 @@ def _create_gain_html_page(phyper_cube, out_dir, html_name, threshold=None,
             format_volume_text(G, err, include_units=False,
                 use_relative_err=print_relative_error,
                 use_scientific_notation=False))
-            
     print >> f, "</h2>"
     print >> f, "<hr />"
     # put the V vs stat plot
@@ -993,6 +1008,15 @@ def _create_gain_html_page(phyper_cube, out_dir, html_name, threshold=None,
             os.path.dirname(os.path.abspath(html_page)))
         print >> f, '<img src="%s" width="%i" /><br />' %(
             figname, mainplots_widths)
+    # if there are additional plots, add them
+    if phyper_cube.additional_plots != []:
+        print >> f, "<hr />"
+        print >> f, "<h3>Additional plots</h3>"
+        for figname in phyper_cube.additional_plots:
+            figname = os.path.relpath(os.path.abspath(figname),
+                os.path.dirname(os.path.abspath(html_page)))
+            print >> f, '<a href="%s"><img src="%s" width="%i" /></a>' %(
+                figname, figname, int(mainplots_widths/2))
 
     # close out
     print >> f, '</body>\n</html>'
