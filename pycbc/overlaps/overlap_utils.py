@@ -711,6 +711,8 @@ def get_exval_outfilename(output_directory, ifo, user_tag = None, num = None):
         tag += '-%i' % (num)
     if ifo is None:
         ifo = 'ND'
+    elif len(ifo.split(',')) > 1:
+        ifo = ''.join(map(str.strip, ifo.split(',')))
     return '%s/%s-EXPECTATION_VALUES%s.sqlite' %(output_directory, ifo.upper(),
         tag)
 
@@ -1018,7 +1020,7 @@ class OverlapResult:
         write_params = [param for param in self.params if param in dir(self)]
         sqlquery = """
             INSERT INTO
-                overlap_results (coinc_event_id, %s)""" %(
+                %s (coinc_event_id, %s)""" %(table_name,
                     ', '.join(write_params)) + """
             VALUES
                 (?,%s)""" %(','.join(['?' for ii in range(len(write_params))]))
@@ -1250,10 +1252,12 @@ def create_all_results_table(connection):
     connection.cursor().executescript(sqlquery)
 
 
-def create_results_table(connection, table_name='overlap_results'):
+def create_results_table(connection, table_name='overlap_results',
+        set_primary_key=True):
     sqlquery = ''.join(["""
         CREATE TABLE IF NOT EXISTS
-            %s (coinc_event_id PRIMARY KEY, """ %(table_name),
+            %s (coinc_event_id%s, """ %(table_name,
+                ' PRIMARY KEY' if set_primary_key else ''),
             ', '.join(OverlapResult.params), """);
         CREATE INDEX IF NOT EXISTS
             or_ceid_idx ON %s (coinc_event_id);""" %(table_name)

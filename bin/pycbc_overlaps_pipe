@@ -46,6 +46,7 @@ def get_injtmpltDB_filename(output_directory, ifo, tag):
     """
     if ifo is None:
         ifo = 'ND'
+    ifo = ''.join(map(str.strip, ifo.split(',')))
     return '%s/%s-INJECTIONS_TMPLTBANK%s.sqlite' %( output_directory, ifo, tag.startswith('-') and tag or '_'+tag)
 
 
@@ -131,10 +132,11 @@ if not os.path.exists('executables'):
     os.mkdir('executables')
 
 # we need to know the ifo for file-naming purposes
-if cp.has_option('common', 'ifo'):
-    ifo = cp.get('common', 'ifo')
-else:
-    ifo = None
+#if cp.has_option('common', 'ifo'):
+#    ifo = cp.get('common', 'ifo')
+#    ifo = ''.join(map(strip, ifo.split(',')))
+#else:
+#    ifo = None
 
 universe = cp.get('condor', 'universe')
 
@@ -189,7 +191,6 @@ else:
     raise ValueError('please provide a psd-model or an asd-file in [common]')
 
 # randomize distances
-add_opts_from_ini(cp, 'randomize_distances', randDists_job)
 # set common options; we only need some of the ones from [common]
 common_opts = [psd_type, 'waveform-f-min', 'overlap-f-min'] 
 for opt in common_opts:
@@ -197,20 +198,42 @@ for opt in common_opts:
 if cp.has_option('common', 'ifo'):
     randDists_job.add_opt('ifo', cp.get('common', 'ifo'))
 randDists_job.add_opt('tmp-space', opts.node_local_dir)
+# add options from the randomize distances; note that if there are
+# repeated arguments as there are in common, they will be
+# overridden; warn user about this
+overridden_opts = [op for op in cp.options('common') 
+    if cp.has_option('randomize_distances', op)]
+if overridden_opts != []:
+    print >> sys.stderr, "WARNING: common options %s for randr jobs " %(
+        ', '.join(overridden_opts)) + 'being overridden by ' +\
+        'randomize_distances section'
+add_opts_from_ini(cp, 'randomize_distances', randDists_job)
 
 # overlaps
-add_opts_from_ini(cp, 'overlaps', overlaps_job)
 # add all arguments from common section
 add_opts_from_ini(cp, 'common', overlaps_job)
+# add options from the overlaps; and warn about overridden
+overridden_opts = [op for op in cp.options('common') 
+    if cp.has_option('overlaps', op)]
+if overridden_opts != []:
+    print >> sys.stderr, "WARNING: common options %s for overlaps jobs " %(
+        ', '.join(overridden_opts)) + 'being overridden by overlaps section'
+add_opts_from_ini(cp, 'overlaps', overlaps_job)
 overlaps_job.add_opt('tmp-space', opts.node_local_dir)
 overlaps_job.add_opt('output-dir', results_dir)
 
 # expectation values
-add_opts_from_ini(cp, 'calc_exval', exval_job)
 # add all arguments from common section
 add_opts_from_ini(cp, 'common', exval_job)
 exval_job.add_opt('tmp-space', opts.node_local_dir)
 exval_job.add_opt('output-dir', results_dir)
+# add options from calc_exval
+overridden_opts = [op for op in cp.options('common') 
+    if cp.has_option('calc_exval', op)]
+if overridden_opts != []:
+    print >> sys.stderr, "WARNING: common options %s for calc_exval jobs " %(
+        ', '.join(overridden_opts)) + 'being overridden by calc_exval section'
+add_opts_from_ini(cp, 'calc_exval', exval_job)
 
 #
 #
@@ -315,6 +338,10 @@ for nn in range(num_inj_nodes):
     #
     #   Create a database with the injections and the templates
     #
+    try:
+        ifo = randDists_job.get_opt('ifo')
+    except KeyError:
+        ifo = None
     db_outfile = get_injtmpltDB_filename(inputdbs_dir, ifo, thread_tag)
     # copy the temp database containing the template bank to the right name
     shutil.copyfile(tmp_db, db_outfile)
@@ -350,9 +377,12 @@ for nn in range(num_inj_nodes):
         thread_tag)
     overlaps_node.add_var_opt('user-tag', this_tag)
     overlaps_node.add_file_arg(randDists_node.get_output_files()[0])
+    try:
+        ifo = overlaps_job.get_opt('ifo')
+    except KeyError:
+        ifo = None
     outfile = overlap_utils.get_outfilename(results_dir, ifo,
-        user_tag = this_tag,
-        num = 0)
+        user_tag=this_tag, num=0)
     overlaps_node.add_output_file(outfile)
     # remove outfile if it already exists
     if os.path.exists(outfile):
@@ -371,6 +401,10 @@ for nn in range(num_inj_nodes):
         thread_tag)
     exval_node.add_var_opt('user-tag', this_tag)
     exval_node.add_file_arg(overlaps_node.get_output_files()[0])
+    try:
+        ifo = exval_job.get_opt('ifo')
+    except KeyError:
+        ifo = None
     outfile = overlap_utils.get_exval_outfilename(results_dir, ifo,
         user_tag = this_tag,
         num = 0)

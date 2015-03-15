@@ -1572,6 +1572,9 @@ class InjectionDict(dict):
                 zip(params, row)])
             inj = Injection(f_min=f_min, **args)
             inj.f_min = f_min
+            # inspinj will set f_final to 0; override this to None
+            if inj.f_final == 0.:
+                inj._f_final = None
             if calc_f_final:
                 inj.set_f_final()
                 if inj.f_final > max_f_final:

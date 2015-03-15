@@ -38,6 +38,7 @@ parser.add_option('', '--layer-config-file', help='If provided, a plot will be c
 parser.add_option('-R', '--plot-reduced-chisq', action = 'store_true', default = False, help = 'make the y-axis reduced chisq; otherwise will be chisq')
 parser.add_option('-n', '--plot-newsnr', metavar = 'newsnr1,newsnr2[,...]', help = 'Plot the specified lines of constant new snr. Can only be done if plot-reduced-chisq is on.')
 parser.add_option('-X', '--newsnr-cut', type = 'float', default = None, help = 'Make the newsnr line given by newsnr-cut bold')
+parser.add_option('', '--plot-sngl-ifo', metavar='IFO', help='Plot the single-ifo triggers instead of coincident triggers (for network of detectors). There must exist a sngl_overlap_results table for this to work. Otherwise, whatever is in the overlap_results table is plotted.')
 parser.add_option('-d', '--dpi', type='int', default=300, help='dpi to use for plots; default is 300')
 parser.add_option('-A', '--x-min', type = 'float', help = 'min x for plot')
 parser.add_option('-B', '--x-max', type = 'float', help = 'max x for plot')
@@ -51,6 +52,15 @@ if opts.user_tag is not None:
     tag = '_%s' % opts.user_tag
 else:
     tag = ''
+
+if opts.plot_sngl_ifo is not None:
+    result_table = 'sngl_ifo_overlap_results'
+    ifo = opts.plot_sngl_ifo.upper()
+    if len(ifo) != 2:
+        raise ValueError("--ifo must be of format {site}{number}, e.g., 'H1'")
+else:
+    result_table = 'overlap_results'
+    ifo = None
 
 # make sure the output directory exists
 if not os.path.exists(opts.output_dir):
@@ -113,10 +123,11 @@ for ii,cache_file_arg in enumerate(cache_files):
     print "  getting results"
     filenames = plot_utils.parse_results_cache(cache_file)
     results, _ = plot_utils.get_injection_results(filenames,
-        weight_function=weight_function, verbose=True)
+        weight_function=weight_function, result_table_name=result_table,
+        ifo=ifo, verbose=True)
     # exclude any zero SNRs
     print "excluding injections with SNR = 0."
-    results = [x for x in results if x.snr != 0.]
+    results = [x for x in results if x.snr != 0. or x.snr is None]
     if apply_cut:
         print "  applying cuts"
         results = plot_utils.slice_results(results, apply_cut)
@@ -143,8 +154,8 @@ for ii,pcube in enumerate(pcubes):
     # empty plots
     if these_results == []:
         continue
-    fig, _ = plot.plot_snrchi(these_results, labels=labels, colors=colors,
-        plot_newsnrs=plot_newsnrs, newsnr_cut=opts.newsnr_cut,
+    fig, _ = plot.plot_snrchi(these_results, ifo=ifo, labels=labels,
+        colors=colors, plot_newsnrs=plot_newsnrs, newsnr_cut=opts.newsnr_cut,
         plot_reduced=opts.plot_reduced_chisq, xmin=opts.x_min, xmax=opts.x_max,
         ymin=opts.y_min, ymax=opts.y_max) 
     if pcube.id_in_layer is not None:

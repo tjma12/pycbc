@@ -9,7 +9,7 @@ import numpy
 import os, sys
 import random
 import time
-from scipy import stats
+from scipy import stats, special
 from optparse import OptionParser
 
 import lal
@@ -50,6 +50,16 @@ def r_uniform_in_volume(r1, r2, N):
 def r_uniform_in_distance(r1, r2, N):
     return numpy.random.uniform(r1, r2, size=N)
 
+def r_uniform_in_logdist(r1, r2, N):
+    return r1*(r2/r1)**numpy.random.uniform(0., 1., size=N)
+
+def r_beta_distribution(rmax, alpha, beta, N=1):
+    return rmax*stats.beta.rvs(alpha, beta, size=N)
+
+def beta_weight(r, rmax, alpha, beta):
+    x = r/rmax
+    return x**(3.-alpha) * (1.-x)**(1.-beta) * rmax * special.beta(alpha, beta)
+    
 def r_in_modified_gamma(r0, rmax, theta=2., r0_at='mode', N=1):
     # FIXME: I think I can generalize beyond k=2
     k = 2.
@@ -84,6 +94,9 @@ def get_weights(distribution, r, r1, r2):
     elif distribution == "distance":
         min_vol = (4./3)*numpy.pi*r1**3.
         weight = 4.*numpy.pi*(r2-r1) * r**2. 
+    elif distribution == "logdist":
+        min_vol = (4./3)*numpy.pi*r1**3.
+        weight = r**3. * numpy.log(r2/r1)
     else:
         raise ValueError("unrecognized distribution %s" %(distribution))
     return min_vol, weight
@@ -95,48 +108,101 @@ parser.add_option("-A", "--asd-file", help = "Load the PSD from a dat file conta
 parser.add_option('-f', '--waveform-f-min', type = 'float', help = "Frequency at which to start the waveform generation (in Hz).")
 parser.add_option('-F', '--overlap-f-min', type = 'float', help = "Frequency at which to start the overlap (in Hz). Note: This must be larger than waveform-f-min.")
 parser.add_option('-r', '--default-sample-rate', type = 'int', default = 4096, help = "Default sample rate to use (in Hz). Must be a power of 2. Only needed if injections' f_final column is not populated. If they are populated, the smallest sample rate giving a Nyquist frequency greater than the f_final of each injection will be used. Default is 4096.")
-parser.add_option('-i', '--ifo', help = "What ifo to inject into. If none specified, no response function will be applied to the injections, and --use-effective-distance must be turned on.")
-parser.add_option('--use-effective-distance', action='store_true', default=False, help='Set the inclination angle to 0, and fix the sky location angles and polarization to be 0. A weight of 1/2.26 will be applied to the distance. Otherwise, angles for the sky-location will be drawn uniformly on the unit sphere.')
-parser.add_option('-s', '--min-snr', type = 'float', help = 'Set the minimum SNR to use.')
-parser.add_option('-S', '--max-snr', type = 'float', help = 'Set the maximum SNR to use; must be larger than min-snr. To use an exact snr, set to the same value as min-snr.')
+parser.add_option('-i', '--ifo', metavar='IFO1[,IFO2,...]', help="What ifo(s) to inject into. If none specified, no response function will be applied to the injections. If multiple specified, the quadrature sum of the overlap of the injection with itself in each ifo will be used for determining distance limits. Currently, the same PSD is used for all the ifos.")
+parser.add_option('--use-effective-distance', action='store_true', default=False, help='Set the inclination angle to 0, and fix the sky location angles and polarization to be 0. A weight of 1/2.26 will be applied to the distance. Otherwise, angles for the sky-location will be drawn uniformly on the unit sphere. This may only be used for a single ifo.')
+parser.add_option('-s', '--min-snr', type = 'float', help = 'Set the minimum single-detector SNR to use. If more than one ifo specified, this will be multipled by N**(1/2) where N is the number of detectors.')
+parser.add_option('-S', '--max-snr', type = 'float', help = 'Set the maximum SNR to use; must be larger than min-snr. To use an exact snr, set to the same value as min-snr. If more than one ifo specified, this will be multipled by N**(1/2) where N is the number of detectors.')
 parser.add_option('', '--fiducial-snr', type='float', help='Set the fiducial SNR; needed for the Gamma distribution.')
+parser.add_option('', '--fiducial-distance', type='float', help='Set the fiducial distance instead of using SNR; needed for the Gamma distribution.')
 parser.add_option('', '--fixed-distance-range', metavar='MIN_D,MAX_D', help='Instead of using the SNR to determine the limits from which to draw the distance, use the given range for all injections.')
-parser.add_option('-d', '--distribution', default='distance', help = 'What distribution to make the injections uniform in. Options are "distance", "volume", or "gamma". If "distance", the distance distribution of the injections will be uniform in distance. If "volume", uniform in volume. If "gamma", distances will be drawn from the Gamma distribution p(x; k=2, theta=2) scaled such that the distance at the max-snr is at x=0 and the mode is at the distance corresponding to the fiducial-snr. Requires fiducial-snr to be specified. Default is distance.')
+parser.add_option('-d', '--distribution', default='distance', metavar="DISTRIBUTION[:PARAMETERS]", help='What distribution to make the injections uniform in. Options are "distance", "volume", "logdist", "beta:${a},${b}", or "gamma". If "distance", the distance distribution of the injections will be uniform in distance. If "volume", uniform in volume. If "logdist", uniform in the log of the distance. If "beta", distances will be drawn from the beta distribution p(r; a,b,rmax) = 1/(rmax*B(a,b)) * (r/rmax)**(1-a) * (1-r/rmax)**(b-1), where B is the beta function. Must provide an a and a b; rmax is taken --max-snr, or the upper bound of the fixed distance range. If "gamma", distances will be drawn from the Gamma distribution p(x; k=2, theta=2) scaled such that the distance at the max-snr is at x=0 and the mode is at the distance corresponding to the fiducial-snr. Requires fiducial-snr to be specified. Default is distance.')
 parser.add_option('', '--scale-by-chirp-dist', action='store_true', help='Scale the distance by the chirp distance relative to a 1.4/1.4 binary. Only can use if fixed-distance-range is on.')
+parser.add_option('', '--no-sigmas', action='store_true', default=False, help="Skip calculating each injection's sigma. This can only be used if fixed-distance-range is used.")
+parser.add_option('', '--skip-rand-location', action='store_true', default=False, help="Skip re-randomizing the sky position.")
 parser.add_option('', '--seed', type = 'int', default = int((time.time()*100)% 1e6), help = 'Set the seed to use for the random number generator. If none specified, will use the current time.')
 parser.add_option('-v', '--verbose', action = 'store_true', help = 'Be verbose.')
 
 opts, filenames = parser.parse_args()
 
 # check options
-wFmin = opts.waveform_f_min
-oFmin = opts.overlap_f_min
-if oFmin < wFmin:
-    raise ValueError, "--waveform-f-min must be less than overlap-f-min"
-default_sample_rate = opts.default_sample_rate
-if numpy.log2(default_sample_rate) % 1 != 0.:
-    raise ValueError, "--default-sample-rate must be a power of 2"
-if opts.asd_file is None and opts.psd_model is None:
-    raise ValueError, "must specify --asd-file or --psd-model"
-if opts.asd_file is not None and not os.path.exists(opts.asd_file):
-    raise ValueError, "asd-file %s not found" % opts.asd_file
-ifo = opts.ifo
+if not opts.no_sigmas:
+    wFmin = opts.waveform_f_min
+    oFmin = opts.overlap_f_min
+    if oFmin < wFmin:
+        raise ValueError, "--waveform-f-min must be less than overlap-f-min"
+    default_sample_rate = opts.default_sample_rate
+    if numpy.log2(default_sample_rate) % 1 != 0.:
+        raise ValueError, "--default-sample-rate must be a power of 2"
+    if opts.asd_file is None and opts.psd_model is None:
+        raise ValueError, "must specify --asd-file or --psd-model"
+    if opts.asd_file is not None and not os.path.exists(opts.asd_file):
+        raise ValueError, "asd-file %s not found" % opts.asd_file
+else:
+    wFmin = 10. # just need a dummy value
+
+ifos = []
 if opts.ifo is not None:
-    ifo = ifo.upper()
-    if len(ifo) != 2:
-        raise ValueError("--ifo must be of format [site][number], e.g., 'H1'")
-elif not opts.use_effective_distance:
-    raise ValueError("If not specifying an ifo, must turn on " +\
-        "use-effective-distance.")
+    for ifo in opts.ifo.split(','):
+        ifo = ifo.upper()
+        if len(ifo) != 2:
+            raise ValueError("--ifo must be of format {site}{number}[,etc.], "+
+                "e.g., 'H1[,L1]'; see help")
+        ifos.append(ifo)
+else:
+    ifos = [None]
+    if not opts.use_effective_distance:
+        raise ValueError("If not specifying an ifo, must turn on " +\
+            "use-effective-distance.")
+if len(ifos) > 1 and opts.use_effective_distance:
+    raise ValueError("Cannot use-effective-distance with more than one ifo.")
+
+# parse the distributions
+# beta is the only special one
+if opts.distribution in ['volume', 'distance', 'gamma', 'logdist']:
+    distribution = opts.distribution
+elif opts.distribution.startswith('beta'):
+    try:
+        distribution, params = opts.distribution.split(':')
+    except ValueError:
+        raise ValueError("beta distribution requires an a and b to be " +
+            "provided; e.g., 'beta:3,2'; see help")
+    try:
+        alpha, beta = map(float, params.split(','))
+    except ValueError:
+        raise ValueError("beta distribution not formatted correctly; see help")
+else:
+    raise ValueError("unreconized distribution; see help")
+
+# parse ranges
+if opts.fixed_distance_range is not None and (opts.min_snr is not None or \
+        opts.max_snr is not None):
+    raise ValueError("Please specify a fixed-distance-range *or* a min/max " +
+        "snr, not both.")
 if opts.fixed_distance_range is not None:
     min_dist, max_dist = map(float, opts.fixed_distance_range.split(','))
+    if distribution == 'beta' and min_dist != 0:
+        raise ValueError("the beta distribution requires the minimum "+
+            "distance to be set to 0.")
 elif opts.scale_by_chirp_dist:
     raise ValueError("cannot use scale-by-chirp-dist if not using a " +\
         "fixed-distance-range (scaling by chirp distance doesn't make " +\
         "sense when using min/max SNR")
 elif opts.min_snr is None or opts.max_snr is None:
-    raise ValueError("must provide a min and max SNR if not specifying a " +
+    if opts.min_snr is None:
+        raise ValueError("must provide a min SNR if not specifying a " +
+            "fixed-distance-range")
+    if opts.max_snr is None and distribution != 'beta':
+        raise ValueError("must provide a maximum SNR if not specifying a " +
+            "fixed-distance-range and not using a beta distribution")
+
+if opts.no_sigmas and opts.fixed_distance_range is None:
+    raise ValueError("must calculate sigmas if not using a " +
         "fixed-distance-range")
+if opts.no_sigmas and distribution == "gamma" and \
+        opts.fiducial_distance is None:
+    raise ValueError("must calculate sigma if using a gamma distribution")
+if opts.fiducial_distance is not None:
+    dist0 = opts.fiducial_distance
 
 random.seed(opts.seed)
 
@@ -200,59 +266,75 @@ for fnum, infile in enumerate(filenames):
             inj.ra = 0.
             inj.polarization = 0.
             inj.phi0 = 0.
-        else:
+        elif not opts.skip_rand_location:
             inj.dec = numpy.arcsin(numpy.random.uniform(-1., 1.))
             inj.ra = numpy.random.uniform(0., 2*numpy.pi)
             inj.inclination = numpy.arccos(numpy.random.uniform(-1., 1.))
             inj.polarization = numpy.random.uniform(0., 2*numpy.pi)
             inj.phi0 = numpy.random.uniform(0., 2*numpy.pi)
 
-        # check if f_final exists; if so calculate the sample rate to use 
-        # from that
-        if inj.f_final:
-            sample_rate = int(2**(numpy.ceil(numpy.log2(inj.f_final))+1))
-        else:
-            sample_rate = opts.default_sample_rate
+        if not opts.no_sigmas:
+            # check if f_final exists; if so calculate the sample rate to use 
+            # from that
+            try:
+                sample_rate = inj.min_sample_rate
+            except ValueError:
+                sample_rate = opts.default_sample_rate
 
-        # make the segment length a power of two
-        seg_length = int(2**numpy.ceil(numpy.log2(inj.duration)+1))
-        # since the duration estimate is based on the 2PN approximation,
-        # the duration may be too short; we'll just put a floor at 2s
-        if seg_length < 2:
-            seg_length = 2
-        df = 1./seg_length
-      
-        htilde = inj.get_fd_waveform(sample_rate, seg_length, ifo,
-            inj.geocent_end_time - seg_length/2, store=False)
+            # make the segment length a power of two
+            seg_length = inj.min_seg_length
 
-        # get the psd and needed workspace vectors
-        if opts.asd_file is not None:
-            psd = workSpace.get_psd_from_file(wFmin, sample_rate,
-                seg_length, opts.asd_file, dyn_range_exp=0)
-        else:
-            psd = workSpace.get_psd(wFmin, sample_rate, seg_length,
-                psd_model, dyn_range_exp=0)
+            # since the duration estimate is based on the 2PN approximation,
+            # the duration may be too short; we'll just put a floor at 2s
+            if seg_length < 2:
+                seg_length = 2
+            df = 1./seg_length
+          
+            # get the psd and needed workspace vectors
+            # FIXME: eventually allow different psds to be used
+            if opts.asd_file is not None:
+                psd = workSpace.get_psd_from_file(wFmin, sample_rate,
+                    seg_length, opts.asd_file, dyn_range_exp=0)
+            else:
+                psd = workSpace.get_psd(wFmin, sample_rate, seg_length,
+                    psd_model, dyn_range_exp=0)
 
-        # calculate sigma
-        sigma = filter.sigma(htilde, psd, oFmin)
+            # calculate the sigmas in each ifo
+            sigmas = {}
+            for ifo in ifos:
+                htilde = inj.get_fd_waveform(sample_rate, seg_length, ifo,
+                    inj.geocent_end_time - seg_length/2, store=False)
+
+                # calculate sigma
+                sigmas[ifo] = filter.sigma(htilde, psd, oFmin)
+
+            # calculate the sigmas as the quadrature sum of the sigmas in all
+            # of the ifos
+            sigma = numpy.sqrt((numpy.array(sigmas.values())**2.).sum())
 
         # get the distance ranges based on the optimal SNR
         if opts.fixed_distance_range is None:
-            min_dist = sigma / opts.max_snr
-            max_dist = sigma / opts.min_snr
+            if opts.max_snr is not None:
+                min_dist = sigma / (numpy.sqrt(len(ifos))*opts.max_snr)
+            max_dist = sigma / (numpy.sqrt(len(ifos))*opts.min_snr)
 
         # get a distance to use, and the weights
-        if opts.distribution == "volume":
+        if distribution == "volume":
             inj.distance = r_uniform_in_volume(min_dist, max_dist, 1)[0]
-        elif opts.distribution == "distance":
+        elif distribution == "distance":
             inj.distance = r_uniform_in_distance(min_dist, max_dist, 1)[0]
-        elif opts.distribution == "gamma":
-            dist0 = sigma / opts.fiducial_snr
+        elif distribution == "logdist":
+            inj.distance = r_uniform_in_logdist(min_dist, max_dist, 1)[0]
+        elif distribution == "beta":
+            inj.distance = r_beta_distribution(max_dist, alpha, beta, 1)[0]
+        elif distribution == "gamma":
+            if opts.fiducial_snr is not None:
+                dist0 = sigma / opts.fiducial_snr
             inj.distance = r_in_modified_gamma(dist0, max_dist,
-                theta=2., r0_at='mode', N=1)
+                theta=2., r0_at='mode', N=1)[0]
         else:
-            raise ValueError("unrecognized --distribution %s; " %(
-                opts.distribution), "see --help for options")
+            raise ValueError("unrecognized distribution %s; " %(
+                distribution), "see --help for options")
 
         # scale by chirp distance if desired
         if opts.scale_by_chirp_dist:
@@ -263,16 +345,19 @@ for fnum, infile in enumerate(filenames):
 
         # get the weights that will need to be applied when
         # computing efficiency
-        if opts.distribution == "gamma":
-            weight = modified_gamma_weight(inj.distance, dist0, max_dist,
-                theta=2., r0_at='mode')
+        if distribution == "gamma":
+            weight = modified_gamma_weight(inj.distance, scale_fac*dist0,
+                scale_fac*max_dist, theta=2., r0_at='mode')
+            min_vol = 0.
+        elif distribution == "beta":
+            weight = beta_weight(inj.distance, scale_fac*max_dist, alpha, beta)
             min_vol = 0.
         else:
             min_vol, weight = get_weights(opts.distribution, inj.distance,
                 scale_fac*min_dist, scale_fac*max_dist)
 
-        # if the ifo is None, we also need to divide by 2.26 to account for
-        # the peanut shell
+        # if using effective distance  we also need to divide by 2.26 to
+        # account for the peanut shell
         if opts.use_effective_distance:
             min_vol /= 2.26**3.
             weight /= 2.26**3.
@@ -295,17 +380,22 @@ for fnum, infile in enumerate(filenames):
         crs.execute(sqlquery % inj.simulation_id)
 
         # save the weights
-        end_time = inj.detector_end_time(ifo)
-        sqlquery = '''
-            INSERT INTO
-                sim_inspiral_params
-                (simulation_id, ifo, event_time, event_time_ns, sigmasq,
-                 min_vol, weight)
-            VALUES
-                (?, ?, ?, ?, ?, ?, ?)'''
-        crs.execute(sqlquery, (inj.simulation_id, ifo,
-            end_time.gpsSeconds, end_time.gpsNanoSeconds,
-            sigma**2., min_vol, weight))
+        for ifo in ifos:
+            end_time = inj.detector_end_time(ifo)
+            if opts.no_sigmas:
+                sigmasq = None
+            else:
+                sigmasq = sigmas[ifo]**2.
+            sqlquery = '''
+                INSERT INTO
+                    sim_inspiral_params
+                    (simulation_id, ifo, event_time, event_time_ns, sigmasq,
+                     min_vol, weight)
+                VALUES
+                    (?, ?, ?, ?, ?, ?, ?)'''
+            crs.execute(sqlquery, (inj.simulation_id, ifo,
+                end_time.gpsSeconds, end_time.gpsNanoSeconds,
+                sigmasq, min_vol, weight))
 
     if opts.verbose:
         print >> sys.stdout, ""

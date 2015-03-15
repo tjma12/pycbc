@@ -2,6 +2,7 @@
 
 import os, sys
 import math
+import functools
 import sqlite3
 import numpy
 import lal
@@ -78,6 +79,38 @@ def ColorBarLog10Formatter(y, pos):
     Formats y=log10(x) values for a colorbar so that they appear as 10^y.
     """
     return "$10^{%.1f}$" % y
+
+def create_bounded_colorbar_formatter(minlim, maxlim, formatter=None):
+    """
+    Creates a frozen wrapper around the given colorbar formatter function
+    that adds a < (>) symbol to the ticklabel if the y value is <= (>=) minlim
+    (maxlim).
+    """
+    if formatter is None:
+        # FIXME: I don't know how colorbar generates it's default formatter,
+        # so I'm just creating a dummy colorbar to get it
+        dumbfig = pyplot.figure()
+        dumbax = dumbfig.add_subplot(111)
+        dumbsc = dumbax.scatter(range(2), range(2), c=(0.9*minlim, 1.1*maxlim),
+            vmin=minlim, vmax=maxlim)
+        dumbcb = dumbfig.colorbar(dumbsc)
+        formatter = dumbcb.formatter
+        del dumbfig, dumbax, dumbsc, dumbcb
+    def bounded_colorbar_formatter(y, pos, formatter, minlim, maxlim):
+        tickstr = formatter(y, pos)
+        if tickstr.startswith('$'):
+            tickstr = tickstr[1:]
+            add_dollar = '$'
+        else:
+            add_dollar = ''
+        if y <= minlim:
+            tickstr = '< %s' %(tickstr)
+        if y >= maxlim:
+            tickstr = '> %s' %(tickstr)
+        return add_dollar + tickstr
+    return pyplot.FuncFormatter(functools.partial(
+        bounded_colorbar_formatter, formatter=formatter, minlim=minlim,
+        maxlim=maxlim))
 
 def empty_plot(ax, message="Nothing to plot"):
     """
@@ -252,7 +285,8 @@ def parse_results_cache(cache_file):
     return filenames
 
 def get_injection_results(filenames, load_inj_distribution=False,
-        weight_function='uniform', verbose=False):
+        weight_function='uniform', result_table_name='overlap_results',
+        ifo=None, verbose=False):
     sqlquery = """
         SELECT
             sim.process_id, sim.waveform, sim.simulation_id,
@@ -264,7 +298,7 @@ def get_injection_results(filenames, load_inj_distribution=False,
             res.new_snr_std, res.num_successes, res.sample_rate,
             res.coinc_event_id
         FROM
-            overlap_results AS res
+            %s AS res""" %(result_table_name) + """
         JOIN
             sim_inspiral as sim, coinc_event_map as map
         ON
@@ -288,6 +322,11 @@ def get_injection_results(filenames, load_inj_distribution=False,
         WHERE
             cdef.description == ?
     """
+    if ifo is not None:
+        sqlquery += 'AND res.ifo == ?'
+        get_args = (weight_function, ifo)
+    else:
+        get_args = (weight_function,)
     results = []
     id_map = {}
     idx = 0
@@ -306,7 +345,7 @@ def get_injection_results(filenames, load_inj_distribution=False,
                     tmplt_s2z, ff, snr,
                     snr_std, weight, chisq, chisq_std, chisq_dof, new_snr,
                     new_snr_std, nsamp, sample_rate, ceid) in \
-                    cursor.execute(sqlquery, (weight_function,)):
+                    cursor.execute(sqlquery, get_args):
                 thisRes = Result()
                 thisRes.unique_id = idx
                 id_map[thisfile, sim_id] = idx
@@ -377,7 +416,8 @@ def get_injection_results(filenames, load_inj_distribution=False,
                         thisRes = results[id_map[thisfile, simid]]
                     except KeyError:
                         continue
-                    thisRes.inj_sigma[ifo] = numpy.sqrt(sigmasq)
+                    if sigmasq is not None:
+                        thisRes.inj_sigma[ifo] = numpy.sqrt(sigmasq)
                     thisRes.inj_min_vol = min_vol
                     thisRes.inj_weight = inj_weight
 

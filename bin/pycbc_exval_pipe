@@ -80,14 +80,18 @@ parser.add_option('-l', '--log-path', help = 'Location to put log directory. Mus
 parser.add_option('-t', '--node-local-dir', help = "User's local node directory on which to do database work.")
 parser.add_option('-u', '--user-tag', help = 'Set a user tag to be applied to the dag.')
 parser.add_option('-c', '--config-file', help = 'Get configuration settings from an ini file.')
-parser.add_option('-s', '--start-seed', type = int, help = 'Start seed for the random number generators. Each node that uses a seed argument will increment this by 1.')
+parser.add_option('-r', '--randr-start-seed', type = int, help = 'Start seed for the nodes for randomizing the distances. The first node will have this seed; each successive node will increase the seed by 1.')
+parser.add_option('-s', '--exval-start-seed', type = int, help = 'Start seed for the Gaussian noise in calc_exval. The first node will have this seed; each successive node will increase the seed by 1.')
 #parser.add_option('-S', '--skip-rand-dist', action='store_true', default=False, help='Skip the step that randomizes the distances using randr-by-snr.')
 
 opts, cache_files = parser.parse_args()
 
-if opts.start_seed is None:
-    raise ValueError, "start seed required"
-seed = opts.start_seed
+if opts.randr_start_seed is None:
+    raise ValueError, "randr start seed required"
+randr_seed = opts.randr_start_seed
+if opts.exval_start_seed is None:
+    raise ValueError, "exval start seed required"
+exval_seed = opts.exval_start_seed
 if not os.path.exists(opts.log_path):
     raise ValueError, "log path not found"
 if not os.path.exists(opts.config_file):
@@ -225,8 +229,8 @@ for nn,this_db in enumerate(overlap_databases):
     #   Create node to randomize the distances
     #
     randDists_node = pipeline.CondorDAGNode(randDists_job)
-    randDists_node.add_var_opt('seed', seed)
-    seed += 1
+    randDists_node.add_var_opt('seed', randr_seed)
+    randr_seed += 1
     # FIXME
     randDists_node.add_file_arg(randr_outfile)
     randDists_node.add_output_file(randr_outfile)
@@ -238,10 +242,10 @@ for nn,this_db in enumerate(overlap_databases):
     #   Create node to calculate the expectation values
     #
     exval_node = pipeline.CondorDAGNode(exval_job)
-    exval_node.add_var_opt('seed', seed)
-    seed += 1
-    this_tag = '%i%s%s' %(seed, opts.user_tag is None and '-' or '_',
+    exval_node.add_var_opt('seed', exval_seed)
+    this_tag = '%i%s%s' %(exval_seed, opts.user_tag is None and '-' or '_',
         thread_tag)
+    exval_seed += 1
     exval_node.add_var_opt('user-tag', this_tag)
     exval_node.add_file_arg(randr_outfile)
     outfile = overlap_utils.get_exval_outfilename(results_dir, ifo,
@@ -253,6 +257,7 @@ for nn,this_db in enumerate(overlap_databases):
         os.remove(outfile)
     exval_node.add_parent(last_node)
     exval_node.set_category('calc_exval')
+    exval_node.set_retry(3)
     dag.add_node(exval_node)
     exval_nodes.append(exval_node)
 print ""
