@@ -169,9 +169,6 @@ print "getting results"
 filenames = plot_utils.parse_results_cache(opts.cache_file)
 results, id_map = plot_utils.get_injection_results(filenames,
     load_inj_distribution=True, verbose=True)
-# exclude any zero SNRs
-print "excluding injections with SNR = 0."
-results = [x for x in results if x.snr != 0.]
 
 print "total number of injections: %i" %(len(results))
 apply_cut = {}
