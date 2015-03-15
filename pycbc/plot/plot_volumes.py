@@ -63,7 +63,8 @@ def get_log10_ticks(ticks):
 
 def _plot_tiles(ax, zvals, plus_errs, minus_errs, phyper_cubes,
         xarg, xlabel, yarg, ylabel,
-        colormap='hot', vmax=None, vmin=None, add_colorbar=False,
+        colormap='hot', vmax=None, vmin=None,
+        add_colorbar=False, cbformat=None,
         annotate=True, fontsize=8, print_relative_err=False, 
         logx=False, logy=False, logz=False,
         xmin=None, xmax=None, ymin=None, ymax=None, add_clickables=True):
@@ -135,7 +136,7 @@ def _plot_tiles(ax, zvals, plus_errs, minus_errs, phyper_cubes,
         # get the color to use for the text
         clr_grayscale = plot_utils.get_color_grayscale(clr)
         if annotate:
-            if clr_grayscale < 0.25:
+            if clr_grayscale < 0.35:
                 txt_clr = 'w'
             else:
                 txt_clr = 'k'
@@ -180,11 +181,17 @@ def _plot_tiles(ax, zvals, plus_errs, minus_errs, phyper_cubes,
         sm = pyplot.cm.ScalarMappable(cmap=colormap,
             norm=pyplot.Normalize(vmin=vmin, vmax=vmax))
         sm.set_array(zvals)
-        if logz:
+        if logz and cbformat is None:
             cbformat = pyplot.FuncFormatter(plot_utils.ColorBarLog10Formatter)
-        else:
-            cbformat = None
         cb = pyplot.colorbar(sm, format=cbformat)
+        # if vmin (vmax) is > (<) the min (max) z value, use a bounded
+        # formatter
+        if vmin > zvals.min() or vmax < zvals.max() and cbformat is None:
+            bounded_formatter = plot_utils.create_bounded_colorbar_formatter(
+                cb.formatter.locs[0], cb.formatter.locs[1],
+                formatter=cb.formatter)
+            cb.formatter = bounded_formatter
+            cb.update_ticks()
     else:
         cb = None
 
@@ -408,13 +415,14 @@ def plot_volume_vs_stat(phyper_cube, min_stat, max_stat, stat_label,
         color=color, xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax)
     # label
     ax.set_xlabel(stat_label)
-    ax.set_ylabel('$V\,(\mathrm{Mpc}^3)$')
+    ax.set_ylabel('$\mathcal{V}\,(\mathrm{Mpc}^3)$')
 
     return fig
 
 
 def plot_twovolume_vs_stat(phyper_cube, test_min_stat, test_max_stat,
         ref_min_stat, ref_max_stat, test_threshold, ref_threshold,
+        test_label='test', ref_label='reference',
         logx=False, logy=False, nbins=20, test_color='b', ref_color='k',
         test_xmin=None, test_xmax=None, ref_xmin=None, ref_xmax=None,
         ymin=None, ymax=None):
@@ -481,10 +489,10 @@ def plot_twovolume_vs_stat(phyper_cube, test_min_stat, test_max_stat,
         'r--', lw=2, zorder=3)
     ax.set_ylim(ymin, ymax)
 
-    ax.set_ylabel('$V\,(\mathrm{Mpc}^3)$')
+    ax.set_ylabel('$\mathcal{V}\,(\mathrm{Mpc}^3)$')
 
     # create the legend
-    ax.legend([testline, refline], ['test', 'reference'])
+    ax.legend([testline, refline], ['$%s$'%(test_label), '$%s$'%(ref_label)])
 
     return fig
 
@@ -539,6 +547,7 @@ def plot_volume_vs_stat_from_layer(layer, min_stat, max_stat, stat_label,
 
 def plot_twovolume_vs_stat_from_layer(layer, test_min_stat, test_max_stat,
         ref_min_stat, ref_max_stat, test_threshold, ref_threshold,
+        test_label='test', ref_label='reference',
         include_children=False, user_tag='', min_ninj=2,
         logx=False, logy=False, nbins=20, test_color='b', ref_color='k',
         test_xmin=None, test_xmax=None, ymin=None, ymax=None, dpi=300,
@@ -577,6 +586,7 @@ def plot_twovolume_vs_stat_from_layer(layer, test_min_stat, test_max_stat,
             sys.stdout.flush()
         fig = plot_twovolume_vs_stat(cube, test_min_stat, test_max_stat,
             ref_min_stat, ref_max_stat, test_threshold, ref_threshold,
+            test_label=test_label, ref_label=ref_label,
             logx=logx, logy=logy, nbins=nbins, test_color=test_color,
             ref_color=ref_color, test_xmin=test_xmin, test_xmax=test_xmax,
             ymin=ymin, ymax=ymax)
@@ -672,7 +682,8 @@ def plot_volumes(phyper_cubes, xarg, xlabel, yarg, ylabel, threshold,
         add_clickables=add_clickables)
 
     if add_title:
-        title = r'$V_{%s%s}~(%s)$' %(tmplt_label, inj_label, units_label)
+        title = r'$\mathcal{V}_{%s%s}~(%s)$' %(tmplt_label, inj_label,
+            units_label)
         # if we are adding a colorbar, put the title on its axis
         if add_colorbar:
             cb.ax.set_ylabel(title)
@@ -820,7 +831,7 @@ def plot_subvolumes(phyper_cubes, xarg, xlabel, yarg, ylabel,
 def plot_gains(phyper_cubes, xarg, xlabel, yarg, ylabel, test_threshold,
         ref_threshold, min_ninj=2, test_label='', ref_label='',
         add_title=True, colormap='Greens', maxgain=None, mingain=None,
-        add_colorbar=False, annotate=True, fontsize=8,
+        add_colorbar=False, cbformat=None, annotate=True, fontsize=8,
         print_relative_err=False, logx=False, logy=False, logz=False,
         xmin=None, xmax=None, ymin=None, ymax=None, fig=None,
         ax=None, add_clickables=True, dpi=300):
@@ -862,16 +873,17 @@ def plot_gains(phyper_cubes, xarg, xlabel, yarg, ylabel, test_threshold,
     _, cb = _plot_tiles(ax, Gs, gain_errs, gain_errs, phyper_cubes,
         xarg, xlabel, yarg, ylabel,
         colormap=colormap, vmax=maxgain, vmin=mingain,
-        add_colorbar=add_colorbar, annotate=annotate, fontsize=fontsize,
+        add_colorbar=add_colorbar, cbformat=cbformat,
+        annotate=annotate, fontsize=fontsize,
         print_relative_err=print_relative_err, logx=logx, logy=logy, logz=logz,
         xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax,
         add_clickables=add_clickables)
 
     if add_title:
-        title = r'$G^{%s}_{%s}$' %(test_label, ref_label)
+        title = r'$\mathcal{G}^{%s}_{%s}$' %(test_label, ref_label)
         # if we are adding a colorbar, put the title on its axis
         if add_colorbar:
-            cb.ax.set_ylabel(title)
+            cb.ax.set_ylabel(title, rotation=0, labelpad=-5)
         else:
             ax.set_title(title)
 
@@ -903,22 +915,33 @@ def plot_subgains(phyper_cubes, xarg, xlabel, yarg, ylabel,
 
     # to ensure we get properly normalized colors, find the largest
     # and smallest gains across all of the children of all of the phyper_cubes
-    if mingain is None or maxgain is None:
-        Gs = numpy.array([
-            child.get_fractional_gain(ref_threshold, test_threshold)
-            for parent in phyper_cubes \
-            for child in parent.children if child.nsamples >= min_ninj and \
-                numpy.isfinite(child.get_fractional_gain(ref_threshold,
-                test_threshold)[0])])[:,0]
-        if mingain is None:
-            mingain = Gs.min()
-        if maxgain is None:
-            maxgain = Gs.max()
+    Gs = numpy.array([
+        child.get_fractional_gain(ref_threshold, test_threshold)
+        for parent in phyper_cubes \
+        for child in parent.children if child.nsamples >= min_ninj and \
+            numpy.isfinite(child.get_fractional_gain(ref_threshold,
+            test_threshold)[0])])[:,0]
+    if mingain is None:
+        mingain = Gs.min()
+    if maxgain is None:
+        maxgain = Gs.max()
+
+    # if mingain (maxgain) is > (<) the min (max) gain of the subtiles, set
+    # the colorbar formatter to be a bounded formatter;
+    # we need to do this here because the
+    # call to plot_gains won't know about the sub-tiles' gains
+    if mingain > Gs.min() or maxgain < Gs.max():
+        cbformat = plot_utils.create_bounded_colorbar_formatter(
+            mingain, maxgain,
+            formatter=plot_utils.ColorBarLog10Formatter if logz else None)
+    else:
+        cbformat = None
 
     # create the master plot with clickable elements
     mfig = plot_gains(phyper_cubes, xarg, xlabel, yarg, ylabel, test_threshold,
         ref_threshold, min_ninj, test_label=test_label, ref_label=ref_label,
-        add_title=True, colormap=colormap, maxgain=maxgain, mingain=mingain,
+        add_title=True, cbformat=cbformat, colormap=colormap,
+        maxgain=maxgain, mingain=mingain,
         add_colorbar=True, annotate=False, logx=logx, logy=logy, logz=logz,
         xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax, add_clickables=True,
         dpi=dpi)
@@ -953,30 +976,37 @@ def plot_subgains(phyper_cubes, xarg, xlabel, yarg, ylabel,
         # now create the sub plot in the inset_axes
         # note that we turn off the clickables in the inset_axes; also, we'll
         # add the axis labels later
-        plot_gains(
-            parent.children, sub_xarg, None, sub_yarg, None, test_threshold,
-            ref_threshold, min_ninj=min_ninj, add_title=False,
-            colormap=colormap, maxgain=maxgain, mingain=mingain,
-            add_colorbar=False, annotate=False,
-            logx=sub_logx, logy=sub_logy, logz=logz, fig=mfig, ax=inset_axes,
-            add_clickables=False)
-        # make the inset axis limits cover exactly the space of the tiles
-        sub_xmin = min([child.get_bound(sub_xarg)[0] \
-            for child in parent.children])
-        sub_xmax = max([child.get_bound(sub_xarg)[1] \
-            for child in parent.children])
-        if sub_logx:
-            sub_xmin = numpy.log10(sub_xmin)
-            sub_xmax = numpy.log10(sub_xmax)
-        sub_ymin = min([child.get_bound(sub_yarg)[0] \
-            for child in parent.children])
-        sub_ymax = max([child.get_bound(sub_yarg)[1] \
-            for child in parent.children])
-        if sub_logy:
-            sub_ymin = numpy.log10(sub_ymin)
-            sub_ymax = numpy.log10(sub_ymax)
-        inset_axes.set_xlim(sub_xmin, sub_xmax)
-        inset_axes.set_ylim(sub_ymin, sub_ymax)
+        # if there are not enough injections in all of the tiles, just create
+        # a hatched empty plot
+        if not numpy.array([child.nsamples >= min_ninj \
+            for child in parent.children]).any():
+                plot_utils.empty_hatched_plot(inset_axes, hatch="x") 
+        else:
+            plot_gains(
+                parent.children, sub_xarg, None, sub_yarg, None,
+                test_threshold, ref_threshold, min_ninj=min_ninj,
+                add_title=False, colormap=colormap,
+                maxgain=maxgain, mingain=mingain,
+                add_colorbar=False, annotate=False,
+                logx=sub_logx, logy=sub_logy, logz=logz,
+                fig=mfig, ax=inset_axes, add_clickables=False)
+            # make the inset axis limits cover exactly the space of the tiles
+            sub_xmin = min([child.get_bound(sub_xarg)[0] \
+                for child in parent.children])
+            sub_xmax = max([child.get_bound(sub_xarg)[1] \
+                for child in parent.children])
+            if sub_logx:
+                sub_xmin = numpy.log10(sub_xmin)
+                sub_xmax = numpy.log10(sub_xmax)
+            sub_ymin = min([child.get_bound(sub_yarg)[0] \
+                for child in parent.children])
+            sub_ymax = max([child.get_bound(sub_yarg)[1] \
+                for child in parent.children])
+            if sub_logy:
+                sub_ymin = numpy.log10(sub_ymin)
+                sub_ymax = numpy.log10(sub_ymax)
+            inset_axes.set_xlim(sub_xmin, sub_xmax)
+            inset_axes.set_ylim(sub_ymin, sub_ymax)
         if ii == label_idx:
             # make the ticklabels white
             if sub_logx: 

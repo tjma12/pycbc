@@ -250,6 +250,11 @@ def plot_recovered_injected(injected_values, recovered_values, param_label,
         ax = fig.add_subplot(111)
 
     if effectualness != []:
+        effectualness = numpy.array(effectualness)
+        sort_idx = numpy.argsort(effectualness)[::-1]
+        injected_values = injected_values[sort_idx]
+        recovered_values = recovered_values[sort_idx]
+        effectualness = effectualness[sort_idx]
         clrs = effectualness
     else:
         clrs = 'b'
