@@ -85,7 +85,7 @@ else:
 # we'll add an additional table to store single ifo info
 # if there is more than one ifo
 if len(ifos) > 1:
-    sngl_table_name = 'sngl_ifo_overlap_results'
+    sngl_ifo_table = 'sngl_ifo_overlap_results'
 wfmin = opts.waveform_f_min
 ofmin = opts.overlap_f_min
 if ofmin < wfmin:
@@ -198,7 +198,8 @@ for fnum, infile in enumerate(filenames):
     overlap_utils.create_results_table(connection)
     # also create a sngl_ifo_overlap_results table if we have more than 1 ifo
     if len(ifos) > 1:
-        overlap_utils.create_results_table(connection, sngl_ifo_table)
+        overlap_utils.create_results_table(connection, sngl_ifo_table,
+            set_primary_key=False)
 
     # get results that have already been analyzed: these are results
     # where the snr, chisq and new_snr are filled in
@@ -258,17 +259,6 @@ for fnum, infile in enumerate(filenames):
 
             df = 1./seg_length
 
-        # set the segment start time; we'll always make this to be
-        # the injection's end_time - 2.5 times its estimated duration
-        segment_start = inj.detector_end_time(ifo) - 2.5*inj.duration
-
-        # get the FD injection and waveform
-        # Note that these will also store the TD versions if they don't
-        # exist in the archive
-        htildeprime = inj.get_fd_waveform(sample_rate, seg_length,
-            ifo, segment_start, store=opts.use_waveform_cache is not None,
-            resample_from_max=opts.vary_n)
-
         # get the template waveform
         htilde = tmplt.get_fd_waveform(sample_rate, seg_length,
             store=opts.use_waveform_cache is not None,
@@ -279,15 +269,22 @@ for fnum, infile in enumerate(filenames):
         sngl_newsnrs = {}
         sngl_success_idx = {}
         for ifo in ifos:
-            # set the segment start time; we'll always make this to be
-            # the injection's end_time - 2.5 times its estimated duration
-            segment_start = inj.detector_end_time(ifo) - 2.5*inj.duration
+            # set the segment start time; we'll always make this so
+            # that the injection ends ~ 5/8 into the segment; the following
+            # works like so: since the injection duration is ~1/4 the segment
+            # length, putting the start time 3/8 into the segment will cause
+            # it to end at ~5/8. We choose 5/8 because we will throw out the
+            # first and last quarter of the segment later on, but we want
+            # to allow some slop because the duration is only an estimate
+            segment_start = inj.detector_end_time(ifo) - inj.duration \
+                - 3*seg_length/8.
 
             # get the FD injection and waveform
             # Note that these will also store the TD versions if they don't
             # exist in the archive
             htildeprime = inj.get_fd_waveform(sample_rate, seg_length,
-                ifo, segment_start, store=opts.use_waveform_cache is not None)
+                ifo, segment_start, store=opts.use_waveform_cache is not None,
+                resample_from_max=opts.vary_n)
 
             # get psd and needed workspace vectors
             if opts.asd_file is not None:
@@ -345,7 +342,7 @@ for fnum, infile in enumerate(filenames):
             sngl_snrs[ifo] = numpy.zeros(opts.n_realizations)
             sngl_chisq_vals[ifo] = numpy.zeros(opts.n_realizations)
             sngl_newsnrs[ifo] = numpy.zeros(opts.n_realizations)
-            sngl_success_idx[ifo] = numpy.array([])
+            sngl_success_idx[ifo] = numpy.empty(0, dtype=int)
             for nn in range(opts.n_realizations):
                 # create an instance of the noise
                 # pycbc's noise package will give the same noise if you pass
@@ -399,7 +396,8 @@ for fnum, infile in enumerate(filenames):
                     sngl_snrs[ifo][nn] = snr
                     sngl_chisq_vals[ifo][nn] = chisq
                     sngl_newsnrs[ifo][nn] = newsnr
-                    numpy.append(sngl_success_idx[ifo], nn)
+                    sngl_success_idx[ifo] = numpy.append(
+                                            sngl_success_idx[ifo], nn)
 
 
         # get coincident results
@@ -407,7 +405,7 @@ for fnum, infile in enumerate(filenames):
             snrs = numpy.zeros(opts.n_realizations)
             chisq_vals = numpy.zeros(opts.n_realizations)
             newsnrs = numpy.zeros(opts.n_realizations)
-            success_indices = numpy.array([])
+            success_indices = numpy.empty(0, dtype=int)
             for nn in range(opts.n_realizations):
                 # apply coincidence: need at least two detectors to have
                 # non-zero snrs
@@ -418,14 +416,14 @@ for fnum, infile in enumerate(filenames):
                     # find coincident chisq in the real search
                     coinc_snrs = numpy.array([sngl_snrs[ifo][nn]
                         for ifo in coinc_ifos])
-                    coinc_new_snrs = numpy.array([sngl_newsnrs[ifo][nn]
+                    coinc_newsnrs = numpy.array([sngl_newsnrs[ifo][nn]
                         for ifo in coinc_ifos])
                     coinc_chisq_vals = numpy.array([sngl_chisq_vals[ifo][nn]
                         for ifo in coinc_ifos])
                     snrs[nn] = numpy.sqrt((coinc_snrs**2.).sum())
                     newsnrs[nn] = numpy.sqrt((coinc_newsnrs**2.).sum())
                     chisq_vals[nn] = coinc_chisq_vals.mean()
-                    numpy.append(success_indices, nn)
+                    success_indices = numpy.append(success_indices, nn)
         else:
             # for single ifo, just store the values
             snrs = sngl_snrs[ifos[0]]
@@ -447,6 +445,11 @@ for fnum, infile in enumerate(filenames):
         if ifos != [None]:
             this_result.ifo = ','.join(sorted(ifos))
         # we'll only take the average over the successful attempts 
+        this_result.num_tries = opts.n_realizations
+        this_result.num_successes = success_indices.shape[0]
+        if this_result.num_successes == 0:
+            # add one index, so we'll get 0's for the means, instead of nans
+            success_indices = numpy.array([0])
         this_result.snr = snrs[success_indices].mean()
         this_result.snr_std = snrs[success_indices].std()
         this_result.chisq = chisq_vals[success_indices].mean()
@@ -454,8 +457,6 @@ for fnum, infile in enumerate(filenames):
         this_result.chisq_dof = 2*opts.n_chisq_bins - 2
         this_result.new_snr = newsnrs[success_indices].mean()
         this_result.new_snr_std = newsnrs[success_indices].std()
-        this_result.num_tries = opts.n_realizations
-        this_result.num_successes = success_indices.shape[0]
 
         # dump to output database
         this_result.write_to_database(connection, ceid)
@@ -474,6 +475,12 @@ for fnum, infile in enumerate(filenames):
                 this_result.time_offset = time_offset.gpsSeconds
                 this_result.time_offset_ns = time_offset.gpsNanoSeconds
                 keep_idx = sngl_success_idx[ifo]
+                this_result.num_tries = opts.n_realizations
+                this_result.num_successes = keep_idx.shape[0]
+                if this_result.num_successes == 0:
+                    # add one index, so we'll get 0's for the means,
+                    # instead of nans
+                    keep_idx = numpy.array([0])
                 this_result.snr = sngl_snrs[ifo][keep_idx].mean()
                 this_result.snr_std = sngl_snrs[ifo][keep_idx].std()
                 this_result.chisq = sngl_chisq_vals[ifo][keep_idx].mean()
@@ -481,8 +488,6 @@ for fnum, infile in enumerate(filenames):
                 this_result.chisq_dof = 2*opts.n_chisq_bins - 2
                 this_result.new_snr = sngl_newsnrs[ifo][keep_idx].mean()
                 this_result.new_snr_std = sngl_newsnrs[ifo][keep_idx].std()
-                this_result.num_tries = opts.n_realizations
-                this_result.num_successes = keep_idx.shape[0]
                 this_result.write_to_database(connection, ceid, sngl_ifo_table)
 
         connection.commit()

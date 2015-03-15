@@ -253,6 +253,18 @@ for fnum, infile in enumerate(filenames):
         if opts.verbose:
             print >> sys.stdout, "Loaded startup data..."
 
+        # check if the last time this ran it finished completely; this happens
+        # if finished_filtering = 2. if so, just go on to the next
+        if startup_dict['finished_filtering'] == 2:
+            print >> sys.stdout, "Already completed all overlaps in %s. " %(
+                    outfile) + "If you would like to re-run from scratch, " + \
+                    "turn on the --replace option."
+            connection.close()
+            if opts.tmp_space is not None:
+                dbtables.discard_connection_filename(outfile, working_filename,
+                    verbose=opts.verbose)
+            continue
+
         # get the backup archive if we're caching to disk
         backup_arxv_fn = startup_dict['backup_archive']
         if backup_arxv_fn is None:
@@ -362,7 +374,7 @@ for fnum, infile in enumerate(filenames):
         injections.set_sort_key(['duration', 'f_final'])
 
     # check that the simulation_id matches
-    if startup_dict and not startup_dict["finished_filtering"] and \
+    if startup_dict and startup_dict["finished_filtering"] == 0 and \
             startup_dict['simulation_id'] is not None:
         check_id = str(injections.as_list[start_inj_idx - 1].simulation_id)
         if startup_dict['simulation_id'] != check_id:
@@ -399,10 +411,10 @@ for fnum, infile in enumerate(filenames):
     # this section by making the start_idx be the same as the length as the
     # templates list
     if startup_dict == {}:
-        finished_filtering = False
+        finished_filtering = 0
     else:
         finished_filtering = startup_dict["finished_filtering"]
-    if finished_filtering:
+    if finished_filtering == 1:
         start_idx = len(templates.as_list)
 
     for jj in range(start_idx, len(templates.as_list)):
@@ -444,15 +456,7 @@ for fnum, infile in enumerate(filenames):
             if not pwin.in_recovered(inj.mchirp, tmplt.mchirp):
                 continue
 
-            # set the segment start time; we'll always make this to be
-            # the injection's end_time - 1.5 times its estimated duration
-            segment_start = inj.detector_end_time(ifo) - 1.5*inj.duration
-
-            #
-            #   If varying N, figure out the sample rate and segment
-            #   lengths to use, and generate the template and injection
-            #   waveforms accordingly
-            #
+            # if varying N, figure out the segment length to use
             if opts.vary_n:
                 # get the segment length to use
                 # we'll set the segment length to be twice the max duration
@@ -460,6 +464,26 @@ for fnum, infile in enumerate(filenames):
                 seg_length = int(2**(numpy.ceil(numpy.log2(
                     max(tmplt.duration, inj.duration)))+1))
 
+                # since the duration estimates are based on the 2PN
+                # approximation, the duration may be too short; we'll just put
+                # a floor at the minimum segment length
+                if seg_length < global_min_seg_length:
+                    seg_length = global_min_seg_length
+
+            # set the segment start time; since the segment length is
+            # (or should be, if not varying n) >= twice the duration of the
+            # injections, we'll always make the segment start time such
+            # that the injection starts 1/4 of the way into the segment. This
+            # means the injection will end ~3/4 into the segment.
+            segment_start = inj.detector_end_time(ifo) - inj.duration \
+                - segment_length/4.
+
+            #
+            #   If varying N, figure out the sample rate to use,
+            #   and generate the template and injection
+            #   waveforms accordingly
+            #
+            if opts.vary_n:
                 # Although we will eventually 0-pad in the FD to get a common
                 # sample rate, we need to know what this common rate is for
                 # PSD generation.
@@ -674,9 +698,9 @@ for fnum, infile in enumerate(filenames):
     # I don't have a good way to checkpoint this, but it should be
     # fairly quick. So we'll just force a checkpoint here, and assume that
     # the rest of the program can finish before the next checkpoint.
-    # note that we set finished_filtering to True here
+    # note that we set finished_filtering to 1 here
     if not finished_filtering:
-        finished_filtering = True
+        finished_filtering = 1
         now = time.time()
         if opts.verbose:
             print >> sys.stdout, "\ncheckpointing..."
@@ -760,14 +784,21 @@ for fnum, infile in enumerate(filenames):
         waveform_utils.close_scratch_archive(archive)
     # move the working database to the outfile and delete backups
     overlap_utils.clean_backup_files(connection)
-    connection.commit()
+    # do a final checkpoint to mark the job as finished
+    finished_filtering = 2
+    overlap_utils.checkpoint(connection, opts.output_dir,
+        archive, now, str(injections.as_list[-1].simulation_id),
+        len(injections.as_list)-1, str(templates.as_list[-1].tmplt_id),
+        len(templates.as_list)-1, finished_filtering, getpass.getuser(),
+        backup_archive=False)
+    # drop all_results table
     if not opts.save_all_overlaps:
         if opts.verbose:
             print >> sys.stdout, "Dropping all_results table and vacuuming..."
         connection.cursor().execute('DROP TABLE all_results')
         connection.commit()
         connection.cursor().execute('VACUUM')
-        connection.commit()
+    connection.commit()
     connection.close()
     if opts.tmp_space is not None:
         dbtables.put_connection_filename(outfile, working_filename,
