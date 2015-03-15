@@ -35,7 +35,7 @@ def get_snr_from_chisqr_newsnr(chisqr, newsnr):
     return snr
 
 
-def plot_snrchi(results, labels=[], colors=[], plot_newsnrs=[],
+def plot_snrchi(results, ifo=None, labels=[], colors=[], plot_newsnrs=[],
     newsnr_cut=None, plot_reduced=False, xmin=None, xmax=None, ymin=None,
     ymax=None):
     """
@@ -47,6 +47,9 @@ def plot_snrchi(results, labels=[], colors=[], plot_newsnrs=[],
         The data to plot. Each element should be a list of plot_utils.Result
         instances from which the snr and chisq values can be retrieved. The
         z-order of results will be the order in which they are listed.
+    ifo: string
+        Specify which ifo the results are from; this will be added to the
+        axes label. Default is None, in which case no ifo label will be added.
     labels: {[], list}
         Optionally specify the labels to use for each list of results. Length
         should be the same as the number of lists in results. If none provided,
@@ -56,7 +59,7 @@ def plot_snrchi(results, labels=[], colors=[], plot_newsnrs=[],
     colors: {[], list}
         Optionally specify the colors to use for each result group. Length
         should be the same as the number of lists in results. If none provided,
-        pyplot's cmap.jet colormap will be used, with the color value given
+        pyplot's cmap.jet_r colormap will be used, with the color value given
         by the relative order of a result list in results. This will also be
         used if any of the elements in colors is set to None.
     plot_newsnrs: {[], list of floats}
@@ -89,6 +92,10 @@ def plot_snrchi(results, labels=[], colors=[], plot_newsnrs=[],
         plot_newsnrs.append(newsnr_cut)
     if plot_newsnrs != [] and not plot_reduced:
         raise ValueError("plot_reduced must be True to plot new snrs")
+    if ifo is not None:
+        ifo = '%s ' %(ifo)
+    else:
+        ifo = ''
     fig = pyplot.figure(dpi=300)
     ax = fig.add_subplot(111)
     min_chisq = numpy.inf
@@ -116,7 +123,7 @@ def plot_snrchi(results, labels=[], colors=[], plot_newsnrs=[],
                 clrval = 0. 
             else:
                 clrval = ii/float(len(results)-1)
-            clr = pyplot.cm.jet(clrval)
+            clr = pyplot.cm.jet_r(clrval)
         ax.scatter(snrs, chisqs, marker='x', s=10, c=clr, edgecolors=clr,
             label=lbl, zorder=ii, alpha=0.8)
         plot_data[lbl] = {}
@@ -160,7 +167,7 @@ def plot_snrchi(results, labels=[], colors=[], plot_newsnrs=[],
         # I tried annotating each curve, but it made the plot kind of messy.
         # Still, leaving this here as a commented out in case someone wants
         # to do this in the future.
-        #pylab.annotate(r'$\hat{\rho} = %.1f$' % newsnr, (newsnr, newsnr),
+        #ax.annotate(r'$\hat{\rho} = %.1f$' % newsnr, (newsnr, newsnr),
         #    rotation=90, ha='left', va='top', fontsize='xx-small')
 
     ax.set_xlabel(r'$\rho$')
