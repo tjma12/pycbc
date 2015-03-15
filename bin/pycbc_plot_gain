@@ -9,6 +9,7 @@ from other progams and place them on the summary pages."""
 import os, sys, shutil
 from optparse import OptionParser
 import numpy
+from pycbc import distributions
 from pycbc.plot import plot_utils
 from pycbc.plot import efficiency
 from pycbc.plot import plot_volumes
@@ -53,11 +54,12 @@ parser.add_option('', '--log-stat', action='store_true', default=False, help='Ma
 parser.add_option('-N', '--min-ninj', type='int', default=2, help='Minimum number of injections that must exist in a block in in order to calculate volume. If a block has less then this, it will be skipped. Default is 2.')
 parser.add_option('', '--print-relative-error', action='store_true', default=False, help='Turn on to print relative errors instead of absolute errors.')
 parser.add_option('', '--use-distance-bins', action='store_true', default=False, help="If turned on, will use distance bins to compute sensitive volumes, rather than the standard Monte Carlo method of using the average of the integrand. Generally, this will yield larger variance, so turn this on with caution.")
+parser.add_option('-A', '--astrophysical-prior', metavar='AST_DISTR.cfg', help='Use the astrophysical prior provided in the given config file. Default is to use whatever was used in the injection set.')
 parser.add_option('', '--include-volume-plots', action='store_true', default=False, help='Include the volume tile plots of the test and reference results to the summary html pages.')
-parser.add_option('-p', '--subplots-cache', help='Load subplots for each tile from the given cache file.')
+parser.add_option('-p', '--additional-plots-cache', metavar='FILE1.cache[,FILE2.cache,...]', help='Load additional plots for each cube from the given cache file(s). To specify multiple cache files, comma separate each file name. All cache files must have used the same layer-configuration-file.')
 parser.add_option('-o', '--output-dir', help='Directory to save results to.')
 parser.add_option('-u', '--user-tag', default='', help='Add a user tag to all output files.')
-parser.add_option('', '--colormap', default='Greens', help='What color map to use for fractional gain plots. Default is Greens.')
+parser.add_option('', '--colormap', default='Greens_r', help='What color map to use for fractional gain plots. Default is Greens_r.')
 parser.add_option('', '--mingain', type='float', default=None, help='Minimum gain to color. Default is to use whatever the minium gain found is.')
 parser.add_option('', '--maxgain', type='float', default=None, help='Maximum gain to color. Default is to use whatever the maximum gain found is.')
 parser.add_option('', '--fontsize', type='int', default=8, help='Fontsize to use in volume plots. Default is 8.')
@@ -79,6 +81,12 @@ if opts.reference_cache_file is None and opts.reference_stat != 'optimal':
         'is not "optimal"')
 if not opts.output_dir:
     raise ValueError('output-dir required')
+
+if opts.astrophysical_prior is not None:
+    astprior = distributions.load_distribution_from_config(
+        opts.astrophysical_prior)
+else:
+    astprior = None
 
 # set the distance bins option if desired
 efficiency.PHyperCube.use_distance_bins = opts.use_distance_bins
@@ -151,7 +159,53 @@ for ii,layer in enumerate(layers):
     layer.images_dir = imgdir
     # update this_folder for the next lower layer
     this_folder = '%slevel%i/'%(this_folder, ii+1) 
-    
+
+# if an astrophysical prior is desired, set it for all of the cubes
+if astprior is not None:
+    for pcube in efficiency.get_all_cubes_in_layers(layers[0]):
+        pcube.reference_cube.set_astro_prior(astprior)
+        pcube.test_cube.set_astro_prior(astprior)
+
+# if additional plots cache are specified, load them
+if opts.additional_plots_cache is not None:
+    print "creating symbolic links to additional plots..."
+    plot_cache = {}
+    # get this layer config file's checksum for comparison
+    layers_checksum = efficiency.get_layers_checksum(layers[0])
+    for cache in opts.additional_plots_cache.split(','):
+        _, this_checksum, this_cache = efficiency.load_plot_cache(cache) 
+        if this_checksum != layers_checksum:
+            raise ValueError("the layer hierarchy in " +\
+                "plot cache %s does not have the same checksum " %(cache) +\
+                "as the layer hierarchy from the given layer-config-file")
+        for tile_layer_id, filelist in this_cache.items():
+            plot_cache.setdefault(tile_layer_id, [])
+            plot_cache[tile_layer_id] += filelist
+    this_layer = layers[0]
+    while this_layer is not None:
+        # if the bottom layer, also create links for the additional plots
+        # to the children
+        if this_layer.sub_layer is None:
+            pcubes = this_layer.parents + this_layer.all_children
+        else:
+            pcubes = this_layer.parents
+        for ii,pcube in enumerate(pcubes):
+            add_plots = plot_cache[pcube.id_in_layer]
+            for jj,plot in enumerate(add_plots):
+                # create a symbolic link to the plot in the layer's image dir
+                figname = '%s%s%s/%i_%i-%s' %(this_layer.root_dir,
+                    this_layer.web_dir, this_layer.images_dir,
+                    ii, jj, os.path.basename(plot))
+                # ensure that we can create a symlink
+                try:
+                    os.remove(figname)
+                except OSError:
+                    pass
+                os.symlink(plot, figname)
+                # add the figname to the pcube's additional plots
+                pcube.additional_plots.append(figname)
+        this_layer = this_layer.sub_layer
+
 # get the dictionary needed to apply cuts
 apply_cut = {}
 for thiscut in opts.apply_cut:
@@ -168,7 +222,8 @@ elif len(cache_info) == 2:
 else:
     raise ValueError("test-cache-file not formatted correctly; see help")
 filenames = plot_utils.parse_results_cache(test_cache)
-test_results, _ = plot_utils.get_injection_results(filenames, verbose=True)
+test_results, _ = plot_utils.get_injection_results(filenames,
+    load_inj_distribution=True, verbose=True)
 
 if apply_cut:
     print "applying cuts"
@@ -186,7 +241,8 @@ if opts.reference_stat != 'optimal':
         raise ValueError("reference-cache-file not formatted correctly; " +\
             "see help")
     filenames = plot_utils.parse_results_cache(ref_cache)
-    ref_results, _ = plot_utils.get_injection_results(filenames, verbose=True)
+    ref_results, _ = plot_utils.get_injection_results(filenames,
+        load_inj_distribution=True, verbose=True)
 else:
     # just set the reference data to be the same as the test
     ref_results = test_results
@@ -214,33 +270,34 @@ while next_layer is not None:
 # all of the tiles
 mingain = opts.mingain
 maxgain = opts.maxgain
-if mingain is None or maxgain is None:
-    print "getting min, max gains"
-    Gs = numpy.array([child.get_fractional_gain(ref_threshold,
-        test_threshold)[0] for layer in layers \
-        for child in layer.all_children \
-            if child.nsamples >= opts.min_ninj and numpy.isfinite(
-            child.get_fractional_gain(ref_threshold, test_threshold)[0])])
-    if mingain is None:
-        mingain = Gs.min()
-    if maxgain is None:
-        maxgain = Gs.max()
+#if mingain is None or maxgain is None:
+#    print "getting min, max gains"
+#    Gs = numpy.array([child.get_fractional_gain(ref_threshold,
+#        test_threshold)[0] for layer in layers \
+#        for child in layer.all_children \
+#            if child.nsamples >= opts.min_ninj and numpy.isfinite(
+#            child.get_fractional_gain(ref_threshold, test_threshold)[0])])
+#    if mingain is None:
+#        mingain = Gs.min()
+#    if maxgain is None:
+#        maxgain = Gs.max()
 
-if opts.include_volume_plots:
-    # if we're including volume plots, get the minimum and maximum volume
-    # from all tiles
-    test_Vs = numpy.array([child.test_cube.get_volume(test_threshold)[0] \
-        for layer in layers \
-        for child in layer.all_children \
-            if child.nsamples >= opts.min_ninj and numpy.isfinite(
-            child.get_fractional_gain(ref_threshold, test_threshold)[0])])
-    ref_Vs = numpy.array([child.reference_cube.get_volume(ref_threshold)[0] \
-        for layer in layers \
-        for child in layer.all_children \
-            if child.nsamples >= opts.min_ninj and numpy.isfinite(
-            child.get_fractional_gain(ref_threshold, test_threshold)[0])])
-    minvol = min(test_Vs.min(), ref_Vs.min())
-    maxvol = max(test_Vs.max(), ref_Vs.max())
+#if opts.include_volume_plots:
+#    # if we're including volume plots, get the minimum and maximum volume
+#    # from all tiles
+#    test_Vs = numpy.array([child.test_cube.get_volume(test_threshold)[0] \
+#        for layer in layers \
+#        for child in layer.all_children \
+#            if child.nsamples >= opts.min_ninj and numpy.isfinite(
+#            child.get_fractional_gain(ref_threshold, test_threshold)[0])])
+#    ref_Vs = numpy.array([child.reference_cube.get_volume(ref_threshold)[0] \
+#        for layer in layers \
+#        for child in layer.all_children \
+#            if child.nsamples >= opts.min_ninj and numpy.isfinite(
+#            child.get_fractional_gain(ref_threshold, test_threshold)[0])])
+#    minvol = min(test_Vs.min(), ref_Vs.min())
+#    maxvol = max(test_Vs.max(), ref_Vs.max())
+minvol = maxvol = None
 
 
 # Plot
@@ -255,7 +312,8 @@ while this_layer is not None:
     this_is_lowest_layer = this_layer.sub_layer is None
     plot_volumes.plot_twovolume_vs_stat_from_layer(this_layer, test_min_stat,
         test_max_stat, ref_min_stat, ref_max_stat, test_threshold,
-        ref_threshold, include_children=this_is_lowest_layer,
+        ref_threshold, test_label=test_label, ref_label=ref_label,
+        include_children=this_is_lowest_layer,
         user_tag=opts.user_tag, min_ninj=opts.min_ninj, logx=opts.log_stat,
         logy=True, nbins=20, dpi=opts.dpi, verbose=True)
 
