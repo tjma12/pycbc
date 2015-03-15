@@ -24,11 +24,17 @@ import math
 import numpy
 from pycbc.plot import plot_utils
 
+def auto_pointsize(N):
+    """
+    Auto scales a point size based on the given number of points.
+    """
+    return 9. * numpy.log10(5e5)/numpy.log10(N) - 8
+
 def plot_effectualness(results, xarg, xlabel, yarg, ylabel,
         tmplt_label='', inj_label='', logx=False, logy=False,
         plot_templates=False, templates=[],
         xmin=None, xmax=None, ymin=None, ymax=None, zmin=None, zmax=None,
-        ptsize=3, cmap=pyplot.cm.Reds, bkgclr='k', dpi=300):
+        ptsize=None, cmap=pyplot.cm.Reds, bkgclr='k', dpi=300):
     
     fig = pyplot.figure(dpi=dpi)
     ax = fig.add_subplot(111, axisbg=bkgclr)
@@ -48,6 +54,10 @@ def plot_effectualness(results, xarg, xlabel, yarg, ylabel,
     yvals = yvals[sort_idx]
     zvals = zvals[sort_idx]
     plot_data['data'] = (xvals, yvals, zvals)
+
+    if ptsize is None:
+        ptsize = max(0.1, min(auto_pointsize(10), auto_pointsize(len(xvals))))
+        
     sc = ax.scatter(xvals, yvals, edgecolors='none', c=zvals, s=ptsize,
         vmin=zmin, vmax=zmax, zorder=1, cmap=cmap)
     # make color bar above the plot
@@ -64,7 +74,7 @@ def plot_effectualness(results, xarg, xlabel, yarg, ylabel,
     cb = fig.colorbar(sc, cax=cax, orientation='horizontal',
         ticks=[round(zmin + (ii*dz), precision) for ii in range(nticks+1)])
     if tmplt_label or inj_label:
-        lbl = ','.join([tmplt_label.strip(), inj_label.strip()])
+        lbl = ' '.join([tmplt_label.strip(), inj_label.strip()])
     else:
         lbl = ''
     cb.ax.set_xlabel('$\mathcal{E}_{\mathrm{%s}}$' % lbl, labelpad=-35)
@@ -148,7 +158,7 @@ def plot_effectualness_cumhist(results, tmplt_label='', inj_label='',
     if logy:
         ax.semilogy()
     if tmplt_label or inj_label:
-        lbl = ','.join([tmplt_label.strip(), inj_label.strip()])
+        lbl = ' '.join([tmplt_label.strip(), inj_label.strip()])
     else:
         lbl = ''
     ax.set_xlabel('$\mathcal{E}_{\mathrm{%s}}$' % lbl)

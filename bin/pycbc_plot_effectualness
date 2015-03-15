@@ -28,7 +28,7 @@ parser.add_option('-Y', '--y-lims', metavar = 'ymin,ymax', help = 'y limits to u
 parser.add_option('-Z', '--z-lims', metavar = 'zmin,zmax', help = 'limits to use')
 parser.add_option('-T', '--tmplt-label', default='', help='set a label for the templates. This will be placed in leading subscript in the colorbar label.')
 parser.add_option('-I', '--inj-label', default='', help='set a label for the injections. This will be placed in trailing subscript in the colorbar label.')
-parser.add_option('', '--point-size', type = 'int', default = 3, help = 'Size to use for points; default is 3.')
+parser.add_option('', '--point-size', type='float', default=None, help='Size to use for points; if none provided, a size is chosen based on the number of points in the plot.')
 parser.add_option('-o', '--output-dir', default='.', help = 'directory to save plot(s) to')
 parser.add_option('-u', '--user-tag', help = 'set a user tag for output file names')
 parser.add_option('', '--plot-type', default = 'png', help = 'type of plot to create; default is png')
