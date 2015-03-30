@@ -57,6 +57,7 @@ fulldataDir = runDir + '/full_data'
 outputDir = runDir + '/output'
 configDir = outputDir + '/config'
 segDir = outputDir + '/segments'
+cacheDir = cacheDir + '/cache'
 
 # change into run dir
 if not os.path.exists(runDir):
@@ -464,8 +465,10 @@ for banks_ifo, banks_ifo_filelist in zip(banks_ifos, banks_ifos_filelists):
     cache = trigs_tag_filelist.convert_to_lal_cache()
 
     # write cache file (mimics old workflow file)
+    if not os.path.exists(cacheDir):
+        os.makedirs(cacheDir)
     tag = '_'.join(trigs_tag).upper()
-    filename = outputDir+'/'+trigs_ifo+'-TMPLTBANK_'+tag+'.cache'
+    filename = cacheDir+'/'+trigs_ifo+'-TMPLTBANK_'+tag+'.cache'
     cache.tofile(open(filename, 'w'))
 
 # write configuration file
