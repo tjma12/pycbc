@@ -146,7 +146,7 @@ def get_cached_bin_layout(bins):
     return _bcache[key]
 
 
-def shift_sum_points(num, outp, phase, np, nb, N)
+def shift_sum_points(num, (outp, phase, np, nb, N, kmin, kmax, bv)):
     fn, nt = get_pchisq_fn(num)   
     args = [(nb, 1), (nt, 1, 1), N] + phase[0:num] + [kmin.gpudata, kmax.gpudata, bv.gpudata, nbins]
     fn.prepared_call(*args)
@@ -166,16 +166,19 @@ def shift_sum(corr, points, bins):
     outp = outc.reshape(nbins * len(points))
     phase = [numpy.float32(p * 2.0 * numpy.pi / N) for p in points]
 
+    cargs = (outp, phase, np, nb, N, kmin, kmax, bv)
+
     np = len(points)
     while np > 0:
         if np >= 4:
-            outp, phase, np = shift_sum_points(4, outp, phase, np, nb, N)
+            outp, phase, np = shift_sum_points(4, cargs)
         elif np >=3:
-            outp, phase, np = shift_sum_points(3, outp, phase, np, nb, N)
+            outp, phase, np = shift_sum_points(3, cargs)
         elif np >=2:
-            outp, phase, np = shift_sum_points(2, outp, phase, np, nb, N)
+            outp, phase, np = shift_sum_points(2, cargs)
         elif np == 1:
-            outp, phase, np = shift_sum_points(1, outp, phase, np, nb, N)
+            outp, phase, np = shift_sum_points(1, cargs)
+            
     o = outc.get()
     return (o.conj() * o).sum(axis=1).real
     
