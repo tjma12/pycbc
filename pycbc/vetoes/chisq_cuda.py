@@ -48,7 +48,14 @@ def chisq_accum_bin(chisq, q):
 
 chisqkernel = Template("""
 #include <stdio.h>
-__global__ void power_chisq_at_points_${NP}(float2* corr, float2* outc, unsigned int N,
+__global__ void power_chisq_at_points_${NP}(
+                                      %if fuse:
+                                          float2* htilde,
+                                          float2* stilde,
+                                      %else:
+                                          float2* corr,
+                                      %endif
+                                      float2* outc, unsigned int N,
                                       %for p in range(NP):
                                         float phase${p},
                                       %endfor
@@ -76,7 +83,16 @@ __global__ void power_chisq_at_points_${NP}(float2* corr, float2* outc, unsigned
     // sliding reduction for each thread from s, e
     for (int i = threadIdx.x + s; i < e; i += blockDim.x){
         float re, im;
-        float2 qt = corr[i];
+        
+        %if fuse:
+            float2 qt, st, ht;
+            st = stilde[i];
+            ht = htilde[i];
+            qt.x = ht.x * st.x + ht.y * st.y;
+            qt.y = ht.x * st.y - ht.y * st.x;            
+        %else:
+            float2 qt = corr[i];
+        %endif
         
         %for p in range(NP):
             __sincosf(phase${p} * i, &im, &re);
@@ -113,12 +129,15 @@ __global__ void power_chisq_at_points_${NP}(float2* corr, float2* outc, unsigned
 """)
 
 _pchisq_cache = {}
-def get_pchisq_fn(np):
+def get_pchisq_fn(np, fuse_correlate=False):
     if np not in _pchisq_cache:
         nt = 256
-        mod = SourceModule(chisqkernel.render(NT=nt, NP=np))
+        mod = SourceModule(chisqkernel.render(NT=nt, NP=np, fuse=fuse_correlate))
         fn = mod.get_function("power_chisq_at_points_%s" % (np))
-        fn.prepare("PPI" + "f" * np + "PPPI")
+        if fuse_correlate:
+            fn.prepare("PPPI" + "f" * np + "PPPI")
+        else:
+            fn.prepare("PPI" + "f" * np + "PPPI") 
         _pchisq_cache[np] = (fn, nt)
     return _pchisq_cache[np]
 
@@ -145,10 +164,18 @@ def get_cached_bin_layout(bins):
         _bcache[key] = (kmin, kmax, bv) 
     return _bcache[key]
 
-
-def shift_sum_points(num, (outp, phase, np, nb, N, kmin, kmax, bv)):
-    fn, nt = get_pchisq_fn(num)   
-    args = [(nb, 1), (nt, 1, 1), N] + phase[0:num] + [kmin.gpudata, kmax.gpudata, bv.gpudata, nbins]
+def shift_sum_points(num, (corr, outp, phase, np, nb, N, kmin, kmax, bv, nbins)):
+    fuse = 'fuse' in corr.gpu_callback_method
+    print "FUSE", fuse
+    fn, nt = get_pchisq_fn(num, fuse_correlate = fuse)   
+    args = [(nb, 1), (nt, 1, 1)] 
+    
+    if fuse:
+        args += [corr.htilde.data.gpudata, corr.stilde.data.gpudata]
+    else:   
+        args += [corr.data.gpudata]
+        
+    args +=[outp.gpudata, N] + phase[0:num] + [kmin.gpudata, kmax.gpudata, bv.gpudata, nbins]
     fn.prepared_call(*args)
        
     outp = outp[num*nbins:]
@@ -157,7 +184,6 @@ def shift_sum_points(num, (outp, phase, np, nb, N, kmin, kmax, bv)):
     return outp, phase, np
 
 def shift_sum(corr, points, bins):
-    corr = corr.data
     kmin, kmax, bv = get_cached_bin_layout(bins)
     nb = len(kmin)
     N = numpy.uint32(len(corr))
@@ -165,21 +191,20 @@ def shift_sum(corr, points, bins):
     outc = pycuda.gpuarray.zeros((len(points), nbins), dtype=numpy.complex64)
     outp = outc.reshape(nbins * len(points))
     phase = [numpy.float32(p * 2.0 * numpy.pi / N) for p in points]
-
-    cargs = (outp, phase, np, nb, N, kmin, kmax, bv)
-
     np = len(points)
+
     while np > 0:
+        cargs = (corr, outp, phase, np, nb, N, kmin, kmax, bv, nbins)
+    
         if np >= 4:
             outp, phase, np = shift_sum_points(4, cargs)
-        elif np >=3:
+        elif np >= 3:
             outp, phase, np = shift_sum_points(3, cargs)
-        elif np >=2:
+        elif np >= 2:
             outp, phase, np = shift_sum_points(2, cargs)
         elif np == 1:
             outp, phase, np = shift_sum_points(1, cargs)
-            
+             
     o = outc.get()
     return (o.conj() * o).sum(axis=1).real
-    
-    
+      
