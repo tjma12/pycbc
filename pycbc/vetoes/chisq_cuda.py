@@ -145,6 +145,17 @@ def get_cached_bin_layout(bins):
         _bcache[key] = (kmin, kmax, bv) 
     return _bcache[key]
 
+
+def shift_sum_points(num, outp, phase, np, nb, N)
+    fn, nt = get_pchisq_fn(num)   
+    args = [(nb, 1), (nt, 1, 1), N] + phase[0:num] + [kmin.gpudata, kmax.gpudata, bv.gpudata, nbins]
+    fn.prepared_call(*args)
+       
+    outp = outp[num*nbins:]
+    phase = phase[num:]
+    np -= num
+    return outp, phase, np
+
 def shift_sum(corr, points, bins):
     corr = corr.data
     kmin, kmax, bv = get_cached_bin_layout(bins)
@@ -158,41 +169,13 @@ def shift_sum(corr, points, bins):
     np = len(points)
     while np > 0:
         if np >= 4:
-            fn, nt = get_pchisq_fn(4)
-            fn.prepared_call((nb, 1), (nt, 1, 1), 
-               corr.gpudata, outp.gpudata, N, phase[0], phase[1], phase[2], phase[3], 
-               kmin.gpudata, kmax.gpudata, bv.gpudata, nbins)
-            outp = outp[4*nbins:]
-            phase = phase[4:]
-            np -= 4    
-            continue
+            outp, phase, np = shift_sum_points(4, outp, phase, np, nb, N)
         elif np >=3:
-            fn, nt = get_pchisq_fn(3)
-            fn.prepared_call((nb, 1), (nt, 1, 1), 
-                corr.gpudata, outp.gpudata, N, phase[0], phase[1], phase[2], 
-                kmin.gpudata, kmax.gpudata, bv.gpudata, nbins)
-            np -= 3
-            outp = outp[3*nbins:]
-            phase = phase[3:]
-            continue
+            outp, phase, np = shift_sum_points(3, outp, phase, np, nb, N)
         elif np >=2:
-            fn, nt = get_pchisq_fn(2)
-            fn.prepared_call((nb, 1), (nt, 1, 1), 
-                corr.gpudata, outp.gpudata, N, phase[0], phase[1],
-                kmin.gpudata, kmax.gpudata, bv.gpudata, nbins)
-            np -= 2
-            outp = outp[2*nbins:]
-            phase=phase[2:]
-            continue
+            outp, phase, np = shift_sum_points(2, outp, phase, np, nb, N)
         elif np == 1:
-            fn, nt = get_pchisq_fn(1)
-            fn.prepared_call((nb, 1), (nt, 1, 1), 
-                corr.gpudata, outp.gpudata, N, phase[0], 
-                kmin.gpudata, kmax.gpudata, bv.gpudata, nbins)
-            np -= 1
-            outp = outp[1*nbins:]
-            phase=phase[1:]
-            continue
+            outp, phase, np = shift_sum_points(1, outp, phase, np, nb, N)
     o = outc.get()
     return (o.conj() * o).sum(axis=1).real
     
