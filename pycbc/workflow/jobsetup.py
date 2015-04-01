@@ -347,8 +347,9 @@ def sngl_ifo_job_setup(workflow, ifo, out_files, curr_exe_job, science_segs,
                 curr_out_files = node.output_files
                 # FIXME: Here we remove PSD files if they are coming through.
                 #        This should be done in a better way. On to-do list.
-                curr_out_files = [i for i in curr_out_files if 'PSD_FILE'\
-                                                                 not in i.tags]
+                #if not curr_exe_job.write_psd:
+                #    curr_out_files = [i for i in curr_out_files if 'PSD_FILE'\
+                #                                                 not in i.tags]
                 out_files += curr_out_files
 
     return out_files

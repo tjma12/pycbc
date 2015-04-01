@@ -1,0 +1,51 @@
+#! /usr/bin/python
+
+# Copyright (C) 2014 Christopher M. Biwer
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation; either version 3 of the License, or (at your
+# option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+# Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+import matplotlib as mpl; mpl.use('Agg')
+import pylab
+
+from pycbc import types
+
+# parse command line
+parser = argparse.ArgumentParser(usage='pycbc_plot_psd [--options]',
+                  description="Plot the power spectral density (PSD).")
+parser.add_argument('--input-file', type=str,
+                  help='Input ASCII file with two columns. The first \
+                        column is the frequency and the second column \
+                        is the value of the PSD.')
+parser.add_argument('--output-file', type=str,
+                  help='Output image file.')
+opts = parser.parse_args()
+
+# read data
+psd = types.load_frequencyseries(opts.input_file)
+
+# convert to ASD
+asd = ( pycbcPSD )**(1./2.)
+
+# plot data
+pylab.loglog(asd.sample_frequencies, asd.numpy())
+
+# format the plot
+pylab.title(opts.input_file)
+pylab.ylabel('ASD')
+pylab.xlabel('Frequency (Hz)')
+
+# save plot
+pylab.savefig('asd-%s-%s.png'%(time,duration))
+pylab.close()

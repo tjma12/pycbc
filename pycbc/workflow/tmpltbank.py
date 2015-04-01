@@ -195,6 +195,8 @@ def setup_tmpltbank_dax_generated(workflow, science_segs, datafind_outs,
     # Set up class for holding the banks
     tmplt_banks = FileList([])
 
+    # Set up class for holding the PSDs
+    psd_files = FileList([])
 
     # Template banks are independent for different ifos, but might not be!
     # Begin with independent case and add after FIXME
@@ -218,6 +220,7 @@ def setup_tmpltbank_dax_generated(workflow, science_segs, datafind_outs,
                            link_job_instance=link_job_instance, 
                            allow_overlap=True,
                            compatibility_mode=compatibility_mode)
+
     return tmplt_banks
 
 def setup_tmpltbank_without_frames(workflow, output_dir,

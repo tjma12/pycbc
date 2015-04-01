@@ -30,7 +30,7 @@ from glue import segments
 from pylal import SnglInspiralUtils
 
 # parse command line
-parser = argparse.ArgumentParser(usage='pycbc_plot_rate [--options]',
+parser = argparse.ArgumentParser(usage='pycbc_plot_timeseries [--options]',
                   description="Plot trigger significance versus time.")
 parser.add_argument('--trigger-files', type=str, nargs="+",
                   help='Input xml files with SnglInspiral triggers.')

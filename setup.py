@@ -336,6 +336,7 @@ setup (
                'bin/sngl/pycbc_plot_glitchgram',
                'bin/sngl/pycbc_plot_histogram',
                'bin/sngl/pycbc_plot_params',
+               'bin/sngl/pycbc_plot_psd',
                'bin/sngl/pycbc_plot_rates',
                'bin/sngl/pycbc_plot_timeseries',
                'bin/hdfcoinc/pycbc_page_injtable',
