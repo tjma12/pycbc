@@ -57,7 +57,7 @@ fulldataDir = runDir + '/full_data'
 outputDir = runDir + '/output'
 configDir = outputDir + '/config'
 segDir = outputDir + '/segments'
-cacheDir = cacheDir + '/cache'
+cacheDir = outputDir + '/cache'
 
 # change into run dir
 if not os.path.exists(runDir):
