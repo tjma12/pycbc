@@ -437,7 +437,7 @@ plotpsd_exe = _workflow.Executable(workflow.cp, 'plotpsd', out_dir=outputDir)
 for psd in psds:
 
     # setup plot PSD nodes
-    image_dir = outputDir+'/'+'_'.join([psd.ifo_string]+trigs_tag)+'/jobs/'+str(psd.segment[0])+'-'+str(psd.segment[1])
+    image_dir = outputDir+'/psds/jobs/'+str(psd.segment[0])+'-'+str(psd.segment[1])
     image_file = _workflow.File(trigs_ifo, 'PLOTPSD',
                                 psd.segment,
                                 directory=image_dir,
