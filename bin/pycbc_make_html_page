@@ -55,6 +55,9 @@ class Directory():
     # a list for all instances of this class
     instances = []
 
+    # a list of subdirs to ignore creating pages for inside output dir
+    exclude_dirs = ['css', 'js']
+
     def __init__(self, path, plots_dir):
 
         # find all subdirs and filenames in directory
@@ -62,13 +65,13 @@ class Directory():
 
         # save subdirs
         self.path    = path.replace(plots_dir, '')
-        self.subdirs = [Directory(path+'/'+subdir, plots_dir) for subdir in subdirs]
+        self.subdirs = [Directory(path+'/'+subdir, plots_dir) for subdir in subdirs if subdir not in self.exclude_dirs]
 
         # loop over all filenames
         self.files = []
         for filename in filenames:
 
-            # check if this is a configuration file for a file
+            # check if this is a configuration file for a file or js or css
             extension = filename.split('.')[-1]
             config_filename = filename.replace(extension, 'file.ini')
             if filename.endswith('file.ini'):

@@ -16,20 +16,22 @@
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
-import pycbc
-import pycbc.version
-
-import os
 import copy
 import logging
+import os
+import shutil
 import urlparse
+
 import argparse
-import lal
 import Pegasus.DAX3 as dax
 
+import lal
 from glue import lal
 from glue import segments
 
+import pycbc
+import pycbc.version
+import pycbc.results
 import pycbc.workflow as _workflow
 
 ################
@@ -58,10 +60,14 @@ outputDir = runDir + '/output'
 configDir = outputDir + '/config'
 segDir = outputDir + '/segments'
 cacheDir = outputDir + '/cache'
+cssStaticDir = pycbc.results.__path__[0] + '/static/css/'
+jsStaticDir = pycbc.results.__path__[0] + '/static/js/'
+cssDir = outputDir + '/css'
+jsDir = outputDir + '/js'
 
 # change into run dir
 if not os.path.exists(runDir):
-  os.makedirs(runDir)
+    os.makedirs(runDir)
 os.chdir(runDir)
 
 # setup workflow and sub-workflows
@@ -470,6 +476,10 @@ for banks_ifo, banks_ifo_filelist in zip(banks_ifos, banks_ifos_filelists):
     tag = '_'.join(trigs_tag).upper()
     filename = cacheDir+'/'+trigs_ifo+'-TMPLTBANK_'+tag+'.cache'
     cache.tofile(open(filename, 'w'))
+
+# copy css and js to output dir
+shutil.copytree(cssStaticDir, cssDir)
+shutil.copytree(jsStaticDir, jsDir)
 
 # write configuration file
 if not os.path.exists(configDir):
