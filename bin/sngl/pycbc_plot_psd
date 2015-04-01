@@ -16,8 +16,9 @@
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
+import argparse
 import matplotlib as mpl; mpl.use('Agg')
-import pylab
+import matplotlib.pyplot as plt
 
 from pycbc import types
 
@@ -39,13 +40,13 @@ psd = types.load_frequencyseries(opts.input_file)
 asd = ( pycbcPSD )**(1./2.)
 
 # plot data
-pylab.loglog(asd.sample_frequencies, asd.numpy())
+plt.loglog(asd.sample_frequencies, asd.numpy())
 
 # format the plot
-pylab.title(opts.input_file)
-pylab.ylabel('ASD')
-pylab.xlabel('Frequency (Hz)')
+plt.title(opts.input_file)
+plt.ylabel('ASD')
+plt.xlabel('Frequency (Hz)')
 
 # save plot
-pylab.savefig('asd-%s-%s.png'%(time,duration))
-pylab.close()
+plt.savefig('asd-%s-%s.png'%(time,duration))
+plt.close()
