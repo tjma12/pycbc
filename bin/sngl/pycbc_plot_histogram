@@ -1,4 +1,4 @@
-#! /usr/bin/python
+#!/usr/bin/python
 
 # Copyright (C) 2014 Christopher M. Biwer
 #
@@ -25,22 +25,21 @@ from glue import segments
 from glue.ligolw import lsctables
 from pylal import SnglInspiralUtils
 
-def find_bins(snrsq_list):
+def find_bins(snrsq_list, upper_lim):
   '''
   Takes an iterable and turns it into bins for a histogram.
   '''
 
   remaining = 0
-  upper_lim = 200
   total_count = 0
-  bins        = [1e-40 for i in range(int(upper_lim)**2)]
+  bins        = [1e-40 for i in range(int(upper_lim))]
   biggest     = 0
 
   for snrsq in snrsq_list:
       snrsq = int(snrsq*snrsq)
       total_count += 1
 
-      if snrsq > upper_lim:
+      if snrsq >= upper_lim:
           remaining += 1
 
       else:
@@ -81,19 +80,25 @@ for trig in inspiralTable:
       significance.append(trig.snr)
 
 # make bins for histogram
-bins, biggest, high_end, remaining = find_bins(significance)
-ymax = int(high_end)**2
-ymin = int(min(significance))**2
+upper_lim = 200
+bins, biggest, high_end, remaining = find_bins(significance, upper_lim)
+xmax = int(high_end)
+xmin = int(min(significance))**2
 
 # plot
-plt.semilogy(range(0,ymax), bins[:ymax])
+plt.semilogy(range(0, xmax), bins[:xmax])
 if remaining:
-  plt.semilogy(ymax, remaining)
+  plt.semilogy(high_end, remaining, marker='o', color='k', label='Count > '+str(xmax))
+
+# format plot
 plt.ylim(0.1)
-plt.xlim(ymin *0.9, ymax * 1.1)
+plt.xlim(xmin * 0.9, xmax * 1.1)
+plt.legend()
 plt.ylabel('Count')
 if opts.new_snr:
   plt.xlabel('newSNR squared')
 else:
   plt.xlabel('SNR squared')
+
+# save plot
 plt.savefig(opts.output_file)
