@@ -53,10 +53,8 @@ def find_bins(snrsq_list):
   return bins, biggest, high_end, remaining
 
 # parse command line
-parser = argparse.ArgumentParser(usage='pycbc_plot_histogram \
-[--options]',
-                                 description="Plot a histogram \
-                                 of triggers.")
+parser = argparse.ArgumentParser(usage='pycbc_plot_histogram [--options]',
+                  description="Plot a histogram  of triggers significance.")
 parser.add_argument('--trigger-files', type=str, nargs="+",
                   help='Input xml files with SnglInspiral triggers.')
 parser.add_argument('--output-file', type=str,
@@ -89,6 +87,8 @@ ymin = int(min(significance))**2
 
 # plot
 plt.semilogy(range(0,ymax), bins[:ymax])
+if remaining:
+  plt.semilogy(ymax, remaining)
 plt.ylim(0.1)
 plt.xlim(ymin *0.9, ymax * 1.1)
 plt.ylabel('Count')
