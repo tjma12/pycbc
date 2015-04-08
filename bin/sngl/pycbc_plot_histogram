@@ -31,21 +31,18 @@ def find_bins(snrsq_list):
   '''
 
   remaining = 0
-  huge_snrs = 0
-  upper_lim = 1e3
+  upper_lim = 200
   total_count = 0
-  bins        = [1e-40 for i in range(int(upper_lim))]
+  bins        = [1e-40 for i in range(int(upper_lim)**2)]
   biggest     = 0
 
   for snrsq in snrsq_list:
       snrsq = int(snrsq*snrsq)
       total_count += 1
 
-      if snrsq > 200:
+      if snrsq > upper_lim:
           remaining += 1
 
-      if snrsq > upper_lim:
-          huge_snrs += 1
       else:
           if snrsq > biggest:
               biggest = snrsq
@@ -87,8 +84,8 @@ for trig in inspiralTable:
 
 # make bins for histogram
 bins, biggest, high_end, remaining = find_bins(significance)
-ymax = int(max(significance)**2) + 1
-ymin = int(min(significance)**2) + 1
+ymax = int(high_end)**2
+ymin = int(min(significance))**2
 
 # plot
 plt.semilogy(range(0,ymax), bins[:ymax])
