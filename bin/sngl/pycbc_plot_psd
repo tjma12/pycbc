@@ -48,7 +48,7 @@ plt.loglog(asd.sample_frequencies, asd.numpy())
 
 # format the plot
 plt.title(opts.input_file)
-plt.ylabel('ASD')
+plt.ylabel('Amplitude Spectral Density (strain/rtHz)')
 plt.xlabel('Frequency (Hz)')
 if opts.x_min and opts.x_max:
     plt.xlim(opts.x_min, opts.x_max)
