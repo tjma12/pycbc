@@ -57,7 +57,6 @@ inspiralTable = SnglInspiralUtils.ReadSnglInspiralFromFiles(opts.trigger_files)
 # put data into lists
 param_x = []
 param_y = []
-param_z = []
 for trig in inspiralTable:
     trig_time = trig.end_time + trig.end_time_ns * 10**(-9)
     if trig_time >= opts.gps_start_time and trig_time < opts.gps_end_time:
