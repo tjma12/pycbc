@@ -31,12 +31,16 @@ parser.add_argument('--input-file', type=str,
                         is the value of the PSD.')
 parser.add_argument('--output-file', type=str,
                   help='Output image file.')
+parser.add_argument('--x-min', type=int,
+                  help='Integer to start x-axis of plot.')
+parser.add_argument('--x-max', type=int,
+                  help='Integer to end x-axis of plot.')
 opts = parser.parse_args()
 
 # read data
 psd = types.load_frequencyseries(opts.input_file)
 
-# convert to ASD
+# convert to amplitude spectral density (ASD)
 asd = ( psd )**(1./2.)
 
 # plot data
@@ -46,6 +50,10 @@ plt.loglog(asd.sample_frequencies, asd.numpy())
 plt.title(opts.input_file)
 plt.ylabel('ASD')
 plt.xlabel('Frequency (Hz)')
+if opts.x_min and opts.x_max:
+    plt.xlim(opts.x_min, opts.x_max)
+elif opts.x_min:
+    plt.xlim(opts.x_min)
 
 # save plot
 plt.savefig(opts.output_file)
