@@ -25,6 +25,10 @@ OUTPUT=/~${USER}/daily_cbc_offline/${MONTH}/${DAY}
 # configuration file to use
 INSTALLED_CONFIG_FILES="sngl/example_sngl.ini"
 
+# mkdir a dir for the month in the format YYYYMM
+mkdir -p ${MONTH}
+cd ${MONTH}
+
 # generate the workflow
 pycbc_make_sngl_workflow --name ${WORKFLOW_NAME} \
                          --installed-config-files ${INSTALLED_CONFIG_FILES} \
