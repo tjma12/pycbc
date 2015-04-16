@@ -84,7 +84,6 @@ html_workflow = _workflow.Workflow(args, 'html')
 scienceSegs, segFileList = _workflow.setup_segment_generation(workflow, segDir)
 
 # if not any science segments then exit
-print dir(scienceSegs)
 if not len(scienceSegs):
     logging.info('There were no science segments.')
     sys.exit()
