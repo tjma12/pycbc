@@ -647,7 +647,7 @@ def get_science_segs_from_datafind_outs(datafindcaches):
     newScienceSegs = {}
     for cache in datafindcaches:
         if len(cache) > 0:
-            groupSegs = segments.segmentlist(e.segment for e in cache).coalesce()
+            groupSegs = segments.segmentlist(segments.segment(int(e.segment[0]), int(e.segment[1])) for e in cache).coalesce()
             ifo = cache.ifo
             if not newScienceSegs.has_key(ifo):
                 newScienceSegs[ifo] = groupSegs
