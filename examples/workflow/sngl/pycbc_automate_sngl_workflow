@@ -1,0 +1,40 @@
+#! /bin/bash
+
+# get midnight from yesterday in form of MM/DD/YYYY
+YESTERDAY=`date -u --date="yesterday" +"%x"`
+YESTERDAY=12/11/2014
+
+# convert midnight to GPS time and analyze a day of data
+GPS_START_TIME=`lalapps_tconvert ${YESTERDAY}`
+GPS_END_TIME=$((${GPS_START_TIME} + 86400))
+
+# month subdir name in form of YYYYMM
+MONTH=`lalapps_tconvert -f "%Y%m" ${GPS_START_TIME}`
+
+# day subdir name in form of YYYYMMDD
+DAY=`lalapps_tconvert -f "%Y%m%d" ${GPS_START_TIME}`
+
+# name of workflow
+WORKFLOW_NAME=sngl_${DAY}
+
+# dir to copy output
+HTMLDIR=/home/${USER}/public_html/daily_cbc_offline/${MONTH}/${DAY}
+
+# link to use in html
+OUTPUT=/~${USER}/daily_cbc_offline/${MONTH}/${DAY}
+
+# configuration file to use
+INSTALLED_CONFIG_FILES="sngl/example_sngl.ini"
+
+# generate the workflow
+pycbc_make_sngl_workflow --name ${WORKFLOW_NAME} \
+                         --installed-config-files ${INSTALLED_CONFIG_FILES} \
+                         --config-overrides workflow:start-time:${GPS_START_TIME} \
+                                            workflow:end-time:${GPS_END_TIME} \
+                                            workflow:workflow-html-basedir:${HTMLDIR} \
+                                            workflow:workflow-output-server:${OUTPUT} \
+                                            html:analysis-subtitle:${MONTH}/${DAY}
+
+# plan the workflow
+cd ${WORKFLOW_NAME}
+pycbc_submit_dax ${WORKFLOW_NAME}.dax
