@@ -83,6 +83,12 @@ html_workflow = _workflow.Workflow(args, 'html')
 # get segments
 scienceSegs, segFileList = _workflow.setup_segment_generation(workflow, segDir)
 
+# if not any science segments then exit
+print dir(scienceSegs)
+if not len(scienceSegs):
+    logging.info('There were no science segments.')
+    sys.exit()
+
 # get frames
 datafinds, scienceSegs = _workflow.setup_datafind_workflow(workflow, scienceSegs,
                            datafindDir, segFileList)
@@ -472,43 +478,45 @@ cache = lal.Cache()
 trigs_ifos, trigs_ifos_filelists = trigs.categorize_by_attr('ifo')
 for trigs_ifo, trigs_ifo_filelist in zip(trigs_ifos, trigs_ifos_filelists):
 
-  # group trigger files by tags and loop over tags
-  trigs_tags, trigs_tags_filelists = trigs_ifo_filelist.categorize_by_attr('tags')
-  for trigs_tag, trigs_tag_filelist in zip(trigs_tags, trigs_tags_filelists):
+    # group trigger files by tags and loop over tags
+    trigs_tags, trigs_tags_filelists = trigs_ifo_filelist.categorize_by_attr('tags')
+    for trigs_tag, trigs_tag_filelist in zip(trigs_tags, trigs_tags_filelists):
 
-    # append cache file
-    cache = trigs_tag_filelist.convert_to_lal_cache()
+        # append cache file
+        cache = trigs_tag_filelist.convert_to_lal_cache()
 
-    # write cache file (mimics old workflow filename)
-    tag = '_'.join(trigs_tag).upper()
-    filename = outputDir+'/'+trigs_ifo+'-INSPIRAL_'+tag+'.cache'
-    cache.tofile(open(filename, 'w'))
+        # write cache file (mimics old workflow filename)
+        tag = '_'.join(trigs_tag).upper()
+        filename = outputDir+'/'+trigs_ifo+'-INSPIRAL_'+tag+'.cache'
+        cache.tofile(open(filename, 'w'))
 
 # group tmpltbank files by IFO and loop over IFOs
 banks_ifos, banks_ifos_filelists = trigs.categorize_by_attr('ifo')
 for banks_ifo, banks_ifo_filelist in zip(banks_ifos, banks_ifos_filelists):
 
-  # group tmpltbank files by tags and loop over tags
-  trigs_tags, trigs_tags_filelists = trigs_ifo_filelist.categorize_by_attr('tags')
-  for trigs_tag, trigs_tag_filelist in zip(trigs_tags, trigs_tags_filelists):
+    # group tmpltbank files by tags and loop over tags
+    trigs_tags, trigs_tags_filelists = trigs_ifo_filelist.categorize_by_attr('tags')
+    for trigs_tag, trigs_tag_filelist in zip(trigs_tags, trigs_tags_filelists):
 
-    # append cache file
-    cache = trigs_tag_filelist.convert_to_lal_cache()
+        # append cache file
+        cache = trigs_tag_filelist.convert_to_lal_cache()
 
-    # write cache file (mimics old workflow file)
-    if not os.path.exists(cacheDir):
-        os.makedirs(cacheDir)
-    tag = '_'.join(trigs_tag).upper()
-    filename = cacheDir+'/'+trigs_ifo+'-TMPLTBANK_'+tag+'.cache'
-    cache.tofile(open(filename, 'w'))
+        # write cache file (mimics old workflow file)
+        if not os.path.exists(cacheDir):
+             os.makedirs(cacheDir)
+        tag = '_'.join(trigs_tag).upper()
+        filename = cacheDir+'/'+trigs_ifo+'-TMPLTBANK_'+tag+'.cache'
+        cache.tofile(open(filename, 'w'))
 
 # copy css and js to output dir
-shutil.copytree(cssStaticDir, cssDir)
-shutil.copytree(jsStaticDir, jsDir)
+if not os.path.exists(cssDir):
+    shutil.copytree(cssStaticDir, cssDir)
+if not os.path.exists(jsDir):
+    shutil.copytree(jsStaticDir, jsDir)
 
 # write configuration file
 if not os.path.exists(configDir):
-  os.makedirs(configDir)
+    os.makedirs(configDir)
 workflow.cp.write(file(configDir+'/'+'workflow_configuration.ini', 'w'))
 
 # append sub-workflows to workflow
