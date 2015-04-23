@@ -40,6 +40,8 @@ parser.add_argument('--gps-start-time', type=int,
                   help='Time to start plotting.')
 parser.add_argument('--gps-end-time', type=int,
                   help='Time to end plotting.')
+parser.add_argument('--mchirp-bins', type=float, nargs="+",
+                  help='List of mchirp bin boundaries.')
 opts = parser.parse_args()
 
 # read inspiral triggers
@@ -47,28 +49,45 @@ inspiralTable = SnglInspiralUtils.ReadSnglInspiralFromFiles(opts.trigger_files)
 
 # put data into lists
 min_rate = 1e-6
-num_min  = (opts.gps_end_time - opts.gps_start_time) / 60
+num_min  = (opts.gps_end_time - opts.gps_start_time) / 60 + 1
 mins     = range(num_min)
 times    = [float(i) / 60.0 for i in mins]
-counts   = [min_rate for i in mins]
 
-# loop over triggers and count them
-for trig in inspiralTable:
-    trigTime = trig.end_time
-    counts[(trigTime - opts.gps_start_time) / 60] += 1
+# create a list of tuples that contain mchirp bin boundaries
+mchirp_bins = []
+for i in range(len(opts.mchirp_bins)):
 
-# convert counts to rate in Hz
-rates = [c / 60.0 for c in counts]
+    # if last entry then exit loop
+    if  i == len(opts.mchirp_bins)-1:
+        break
 
-# turn data into pylab arrays
-x = plt.array(times)
-y = plt.array(rates)
+    # add a tuple of the ith and (i+1)th mchirp boundaries to the list
+    mchirp_bins.append( (opts.mchirp_bins[i], opts.mchirp_bins[i+1]) )
 
 # create pylab figure
 fig  = plt.figure(1, figsize=(8.1,4.0))
 
-# plot data
-p = plt.scatter(x, y, s=0.6)
+# loop over mchirp bins
+for lower_bound,upper_bound in mchirp_bins:
+
+    # create an empty list to keep track of counts in each minute
+    counts   = [min_rate for i in mins]
+
+    # loop over triggers
+    for trig in inspiralTable:
+        if trig.mchirp >= lower_bound and trig.mchirp < upper_bound:
+            trigTime = trig.end_time
+            counts[(trigTime - opts.gps_start_time) / 60] += 1
+
+    # convert counts to rate in Hz
+    rates = [c / 60.0 for c in counts]
+
+    # turn data into pylab arrays
+    x = plt.array(times)
+    y = plt.array(rates)
+
+    # plot data
+    plt.plot(x, y, 'o', label='[%.2f,%.2f)'%(lower_bound, upper_bound))
 
 # format the plot
 plt.yscale('log')
@@ -76,6 +95,7 @@ plt.ylim(min_rate * 10, max(rates) * 10)
 plt.xlim(0, times[-1])
 plt.ylabel('Minute-averaged rate (Hz)')
 plt.xlabel('Time since %s (hrs)'%opts.gps_start_time)
+plt.legend(loc='lower right')
 
 # save plot
 plt.savefig(opts.output_file)
