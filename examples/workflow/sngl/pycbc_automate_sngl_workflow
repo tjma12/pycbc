@@ -26,8 +26,8 @@ OUTPUT=/~${USER}/daily_cbc_offline/${MONTH}/${DAY}
 INSTALLED_CONFIG_FILES="sngl/example_sngl.ini"
 
 # mkdir a dir for the month in the format YYYYMM
-mkdir -p ${MONTH}
-cd ${MONTH}
+mkdir -p /home/${USER}/sngl_er6/lowmass/oaf-cal_darm_dq/${MONTH}
+cd /home/${USER}/sngl_er6/lowmass/oaf-cal_darm_dq/${MONTH}
 
 # generate the workflow
 pycbc_make_sngl_workflow --name ${WORKFLOW_NAME} \
