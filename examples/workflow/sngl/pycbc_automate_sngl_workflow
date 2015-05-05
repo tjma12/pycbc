@@ -2,7 +2,6 @@
 
 # get midnight from yesterday in form of MM/DD/YYYY
 YESTERDAY=`date -u --date="yesterday" +"%x"`
-YESTERDAY=04/04/2015
 
 # convert midnight to GPS time and analyze a day of data
 GPS_START_TIME=`lalapps_tconvert ${YESTERDAY}`
