@@ -1,4 +1,5 @@
 sphinx
+numpydoc
 sphinxcontrib-programoutput
 numpy
 scipy
