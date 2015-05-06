@@ -63,7 +63,7 @@ def fc_cluster_over_window_fast(times, values, window_length):
         The reduced list of indices of the SNR values
     """
     if window_length <= 0:
-        return times
+        return numpy.arange(len(times))
 
     from scipy.weave import inline
     indices = numpy.zeros(len(times), dtype=int)
@@ -150,7 +150,7 @@ class EventManager(object):
         for column, coltype in zip (column, column_types):
             self.event_dtype.append( (column, coltype) )
 
-        self.events = numpy.events = numpy.array([], dtype=self.event_dtype)
+        self.events = numpy.array([], dtype=self.event_dtype)
         self.template_params = []
         self.template_index = -1
         self.template_events = numpy.array([], dtype=self.event_dtype)
@@ -184,7 +184,7 @@ class EventManager(object):
             raise RuntimeError('Chi-square test must be enabled in order to use newsnr threshold')
 
         remove = [i for i, e in enumerate(self.events) if \
-            newsnr(abs(e['snr']), e['chisq'] / (2 * e['chisq_dof'] - 2)) < threshold]
+            newsnr(abs(e['snr']), e['chisq'] / e['chisq_dof']) < threshold]
         self.events = numpy.delete(self.events, remove)
 
     def maximize_over_bank(self, tcolumn, column, window):
@@ -289,43 +289,32 @@ class EventManager(object):
             raise ValueError('Cannot write to this format')
     
     def write_to_hdf(self, outname):  
-        def changes(arr):
-            from pycbc.future import unique
-            l = numpy.where(arr[:-1] != arr[1:])[0]
-            l = numpy.concatenate(([0], l+1, [len(arr)]))
-            return unique(l)
-          
         class fw(object):
-            def __init__(self, name, prefix, groups, hashes):
+            def __init__(self, name, prefix):
                 import h5py
                 self.f = h5py.File(name, 'w')
                 self.prefix = prefix
-                self.groups = groups
-                self.hashes = hashes
-                
+
             def __setitem__(self, name, data):
-                for i in range(len(self.groups) - 1):
-                    col = self.prefix + '/' + str(self.hashes[i]) + '/' + name
-                    group_data = data[self.groups[i]:self.groups[i+1]]
-                    self.f.create_dataset(col, data=group_data, compression='gzip')
+                col = self.prefix + '/' + name
+                self.f.create_dataset(col, data=data, 
+                                      compression='gzip', 
+                                      compression_opts=9,
+                                      shuffle=True)
                        
         self.events.sort(order='template_id')
-        
+              
         # Template id hack
         m1 = numpy.array([p['tmplt'].mass1 for p in self.template_params], dtype=numpy.float32)
         m2 = numpy.array([p['tmplt'].mass2 for p in self.template_params], dtype=numpy.float32)
         s1 = numpy.array([p['tmplt'].spin1z for p in self.template_params], dtype=numpy.float32)
-        s2 = numpy.array([p['tmplt'].spin2z for p in self.template_params], dtype=numpy.float32)
-    
+        s2 = numpy.array([p['tmplt'].spin2z for p in self.template_params], dtype=numpy.float32) 
         th = numpy.zeros(len(m1), dtype=int)
         for j, v in enumerate(zip(m1, m2, s1, s2)):
             th[j] = hash(v)
         
         tid = self.events['template_id']
-        ifo = self.opt.channel_name[0:2]
-        ctid = changes(tid)
-        hs = th[tid][ctid[0:-1]]
-        f = fw(outname, ifo, ctid, hs)
+        f = fw(outname, self.opt.channel_name[0:2])
         
         if len(self.events):
             f['snr'] = abs(self.events['snr'])
@@ -338,24 +327,33 @@ class EventManager(object):
             template_sigmasq = numpy.array([t['sigmasq'] for t in self.template_params], dtype=numpy.float32)
             f['sigmasq'] = template_sigmasq[tid]
          
-            cont_dof = self.opt.autochi_number_points if self.opt.autochi_onesided else 2 * self.opt.autochi_number_points
+            # FIXME: Can we get this value from the autochisq instance?
+            cont_dof = self.opt.autochi_number_points
+            if self.opt.autochi_onesided is None:
+                cont_dof = cont_dof * 2
+            if self.opt.autochi_two_phase:
+                cont_dof = cont_dof * 2
+            if self.opt.autochi_max_valued_dof:
+                cont_dof = self.opt.autochi_max_valued_dof
             f['cont_chisq_dof'] = numpy.repeat(cont_dof, len(self.events))
-            f['bank_chisq_dof'] = numpy.repeat(10, len(self.events))      
+            f['bank_chisq_dof'] = numpy.repeat(10, len(self.events))
 
             if 'chisq_dof' in self.events.dtype.names:
                 f['chisq_dof'] = self.events['chisq_dof'] / 2 + 1
             else:
                 f['chisq_dof'] = numpy.zeros(len(self.events))
 
+            f['template_hash'] = th[tid]
+            
         if self.opt.trig_start_time:
-            f.f['%s/search/start_time' % ifo] = numpy.array([self.opt.trig_start_time])
+            f['search/start_time'] = numpy.array([self.opt.trig_start_time])
         else:
-            f.f['%s/search/start_time' % ifo] = numpy.array([self.opt.gps_start_time + self.opt.segment_start_pad])
+            f['search/start_time'] = numpy.array([self.opt.gps_start_time + self.opt.segment_start_pad])
             
         if self.opt.trig_end_time:
-            f.f['%s/search/end_time' % ifo] = numpy.array([self.opt.trig_end_time])
+            f['search/end_time'] = numpy.array([self.opt.trig_end_time])
         else:
-            f.f['%s/search/end_time' % ifo] = numpy.array([self.opt.gps_end_time - self.opt.segment_end_pad])
+            f['search/end_time'] = numpy.array([self.opt.gps_end_time - self.opt.segment_end_pad])
 
     def write_to_xml(self, outname):
         """ Write the found events to a sngl inspiral table 
@@ -464,10 +462,15 @@ class EventManager(object):
             if hasattr(self.opt, 'autochi_number_points')\
                     and self.opt.autochi_number_points>0:
                 row.cont_chisq = event['cont_chisq']
-                if (self.opt.autochi_onesided):
-                    row.cont_chisq_dof = self.opt.autochi_number_points
-                else:
-                    row.cont_chisq_dof = 2*self.opt.autochi_number_points
+                # FIXME: Can this come from the autochisq instance?
+                cont_dof = self.opt.autochi_number_points
+                if self.opt.autochi_onesided is None:
+                    cont_dof = cont_dof * 2
+                if self.opt.autochi_two_phase:
+                    cont_dof = cont_dof * 2
+                if self.opt.autochi_max_valued_dof:
+                    cont_dof = self.opt.autochi_max_valued_dof
+                row.cont_chisq_dof = cont_dof
 
             row.eff_distance = sigmasq ** (0.5) / abs(snr)
             row.snr = abs(snr)
@@ -660,7 +663,7 @@ class EventManagerMultiDet(EventManager):
         for column, coltype in zip (column, column_types):
             self.event_dtype.append( (column, coltype) )
 
-        self.events = numpy.events = numpy.array([], dtype=self.event_dtype)
+        self.events = numpy.array([], dtype=self.event_dtype)
         self.event_id_map = {}
         self.event_index = 0
         self.template_params = []
@@ -826,7 +829,6 @@ class EventManagerMultiDet(EventManager):
     def _add_coincs_to_output(self, coinc_def_table, coinc_event_table,
                               coinc_event_map_table, time_slide_table,
                               coinc_inspiral_table, sngl_table, proc_id):
-        from pylal.ligolw_sstinca import coinc_inspiral_end_time
         # FIXME: This shouldn't live here
         # FIXME: More choices would be good
         magic_number = 6.0

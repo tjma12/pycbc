@@ -15,11 +15,17 @@ parser.add_argument('--newsnr-contours', nargs='*', help="List of newsnr values 
 args = parser.parse_args()
 
 f = h5py.File(args.trigger_file, 'r')
-
+ifo = f.keys()[0]
+f = f[ifo]
 snr = f['snr'][:]
+
+# We now need to handle the case where chisq is not actually calculated
+# 0 is used as a sentinel value
 chisq = f['chisq'][:]
+l = chisq == 0
 chisq_dof = f['chisq_dof'][:]
 chisq /= (chisq_dof * 2 - 2)
+chisq[l] = .1
 
 def snr_from_chisq(chisq, newsnr, q=6.):
     snr = numpy.zeros(len(chisq)) + float(newsnr)
@@ -29,7 +35,7 @@ def snr_from_chisq(chisq, newsnr, q=6.):
 
 if args.veto_file:
     time = f['end_time'][:]
-    locs, segs = veto.indices_outside_segments(time, f.attrs['ifo'], [args.veto_file])
+    locs, segs = veto.indices_outside_segments(time, ifo, [args.veto_file])
     snr = snr[locs]
     chisq = chisq[locs]
 
@@ -55,7 +61,7 @@ pylab.ylim(chisq.min(), chisq.max())
 cb.set_label('Trigger Density')
 pylab.xlabel('Signal-to-noise Ratio')
 pylab.ylabel('Reduced $\chi^2$')
-pylab.title('%s: Single Detector Trigger Distribution' % f.attrs['ifo'])
+pylab.title('%s: Single Detector Trigger Distribution' % ifo)
 pylab.savefig(args.output_file, dpi=300)
 
 

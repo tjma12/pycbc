@@ -40,7 +40,6 @@ from glue.ligolw import utils as ligolw_utils
 from pycbc.workflow.core import FileList, make_analysis_dir, Executable, Node
 from pycbc.workflow.core import get_random_label
 from pycbc.workflow.jobsetup import LigolwAddExecutable, LigolwSSthincaExecutable, SQLInOutExecutable
-from pylal import ligolw_cafe
 
 class ContentHandler(ligolw.LIGOLWContentHandler):
     pass
@@ -184,6 +183,8 @@ def setup_coincidence_workflow_ligolw_thinca(
     ligolwAddOuts : pycbc.workflow.core.FileList
         A list of the output files generated from ligolw_add.
     """
+    from pylal import ligolw_cafe
+
     logging.debug("Entering coincidence module.")
     cp = workflow.cp
     ifoString = workflow.ifo_string
@@ -281,6 +282,7 @@ def setup_coincidence_workflow_ligolw_thinca(
                                  verbose=False))
         time_slide_table.sync_next_id()
         time_slide_dict = time_slide_table.as_dict()
+
         cafe_seglists, cafe_caches = ligolw_cafe.ligolw_cafe(cacheInspOuts,
             time_slide_dict.values(), extentlimit=max_extent, verbose=False)
         logging.debug("Done with cafe.")
@@ -358,7 +360,6 @@ def setup_coincidence_workflow_ligolw_thinca(
             # Assume that if we have partitioned input then if *one* job in the
             # partitioned input is an input then *all* jobs will be.
             if not parallelize_split_input:
-                job_label = get_random_label()
                 inputTrigFiles = FileList([])
                 for object in cafe_cache.objects:
                     inputTrigFiles.append(object.workflow_file)
@@ -367,14 +368,12 @@ def setup_coincidence_workflow_ligolw_thinca(
         
                 # Now we can create the nodes
                 node = ligolwadd_job.create_node(cafe_cache.extent, llw_files)
-                node.add_profile('pegasus', 'label', job_label)
                 ligolwAddFile = node.output_files[0]
                 ligolwAddOuts.append(ligolwAddFile)
                 workflow.add_node(node)
                 for category in veto_cats:
                     node = ligolwthinca_job[category].create_node(\
                                 cafe_cache.extent, coincSegment, ligolwAddFile)
-                    node.add_profile('pegasus', 'label', job_label)
                     ligolwThincaOuts += \
                         node.output_files.find_output_without_tag('DIST_STATS')
                     ligolwThincaLikelihoodOuts += \
@@ -383,14 +382,12 @@ def setup_coincidence_workflow_ligolw_thinca(
                     if coinc_post_cluster:
                         node = cluster_job[category].create_node(\
                                        cafe_cache.extent, ligolwThincaOuts[-1])
-                        node.add_profile('pegasus', 'label', job_label)
                         ligolwClusterOuts += node.output_files
                         workflow.add_node(node)
             else:
-                for key in insp_files_dict.keys():
-                    job_label = get_random_label()
+                for key in inspiral_outs_dict.keys():
                     curr_tags = ["JOB%d" %(key)]
-                    curr_list = insp_files_dict[key]
+                    curr_list = inspiral_outs_dict[key]
                     inputTrigFiles = FileList([])
                     for object in cafe_cache.objects:
                         inputTrigFiles.append(
@@ -401,7 +398,6 @@ def setup_coincidence_workflow_ligolw_thinca(
                     # Now we can create the nodes
                     node = ligolwadd_job.create_node(cafe_cache.extent,
                                                      llw_files, tags=curr_tags)
-                    node.add_profile('pegasus', 'label', job_label)
                     ligolwAddFile = node.output_files[0]
                     ligolwAddOuts.append(ligolwAddFile)
                     workflow.add_node(node)
@@ -414,7 +410,6 @@ def setup_coincidence_workflow_ligolw_thinca(
                         node = ligolwthinca_job[category].create_node(\
                              cafe_cache.extent, coincSegment, ligolwAddFile,
                              tags=curr_tags, write_likelihood=write_likelihood)
-                        node.add_profile('pegasus', 'label', job_label)
                         ligolwThincaOuts += \
                                node.output_files.find_output_without_tag(\
                                                                   'DIST_STATS')
@@ -425,7 +420,6 @@ def setup_coincidence_workflow_ligolw_thinca(
                         if coinc_post_cluster:
                             node = cluster_job[category].create_node(\
                                        cafe_cache.extent, ligolwThincaOuts[-1])
-                            node.add_profile('pegasus', 'label', job_label)
                             ligolwClusterOuts += node.output_files
                             workflow.add_node(node)
 
