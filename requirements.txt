@@ -1,7 +1,6 @@
 sphinx
 sphinxcontrib-programoutput
 numpy
-PIL
 scipy
 jinja2
 mako
