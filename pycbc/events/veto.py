@@ -41,8 +41,9 @@ def segments_to_file(segs, filename, name, ifo=""):
     process = ligolw_utils.process.register_to_xmldoc(outdoc, argv[0], {})
 
     # cast segment values into LIGOTimeGPS for glue library utils
-    if type(segs[0][0]) != LIGOTimeGPS:
-        fsegs = [( LIGOTimeGPS(segs[i][0]), LIGOTimeGPS(segs[i][1]) ) for i in range(len(segs))]
+    if len(segs):
+        if type(segs[0][0]) != LIGOTimeGPS:
+            fsegs = [( LIGOTimeGPS(segs[i][0]), LIGOTimeGPS(segs[i][1]) ) for i in range(len(segs))]
     else:
         fsegs = segs
 
