@@ -1,5 +1,11 @@
 #! /bin/bash
 
+# get the search name from the command line
+SEARCH=${1}
+
+# get the configuration file from the command line
+INSTALLED_CONFIG_FILES=${2}
+
 # get midnight from yesterday in form of MM/DD/YYYY
 YESTERDAY=`date -u --date="yesterday" +"%x"`
 
@@ -14,20 +20,14 @@ MONTH=`lalapps_tconvert -f "%Y%m" ${GPS_START_TIME}`
 DAY=`lalapps_tconvert -f "%Y%m%d" ${GPS_START_TIME}`
 
 # name of workflow
-WORKFLOW_NAME=sngl_${DAY}
+WORKFLOW_NAME=sngl_${SEARCH}_${DAY}
 
 # dir to copy output
-HTMLDIR=/home/${USER}/public_html/daily_cbc_offline/${MONTH}/${DAY}
-
-# link to use in html
-OUTPUT=/~${USER}/daily_cbc_offline/${MONTH}/${DAY}
-
-# configuration file to use
-INSTALLED_CONFIG_FILES="sngl/example_sngl.ini"
+HTMLDIR=/home/${USER}/public_html/daily_cbc_offline/${SEARCH}/${MONTH}/${DAY}
 
 # mkdir a dir for the month in the format YYYYMM
-mkdir -p /home/${USER}/sngl_er6/lowmass/${MONTH}
-cd /home/${USER}/sngl_er6/lowmass/${MONTH}
+mkdir -p /home/${USER}/sngl_er6/${SEARCH}/${MONTH}
+cd /home/${USER}/sngl_er6/${SEARCH}/${MONTH}
 
 # generate the workflow
 pycbc_make_sngl_workflow --name ${WORKFLOW_NAME} \
@@ -35,7 +35,6 @@ pycbc_make_sngl_workflow --name ${WORKFLOW_NAME} \
                          --config-overrides workflow:start-time:${GPS_START_TIME} \
                                             workflow:end-time:${GPS_END_TIME} \
                                             workflow:workflow-html-basedir:${HTMLDIR} \
-                                            workflow:workflow-output-server:${OUTPUT} \
                                             html:analysis-subtitle:${MONTH}/${DAY}
 
 # plan the workflow
