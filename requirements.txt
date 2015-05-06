@@ -3,3 +3,7 @@ scipy
 matplotlib
 jinja2
 mako
+sphinx
+numpydoc
+sphinxcontrib-programoutput
+h5py

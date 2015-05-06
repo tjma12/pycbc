@@ -2,4 +2,3 @@ _build
 modules.rst
 pycbc.*.rst
 pycbc.rst
-conf.py
