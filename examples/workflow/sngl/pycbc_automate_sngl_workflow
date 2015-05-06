@@ -37,6 +37,10 @@ pycbc_make_sngl_workflow --name ${WORKFLOW_NAME} \
                                             workflow:workflow-html-basedir:${HTMLDIR} \
                                             html:analysis-subtitle:${MONTH}/${DAY}
 
-# plan the workflow
-cd ${WORKFLOW_NAME}
-pycbc_submit_dax ${WORKFLOW_NAME}.dax
+# check if workflow generated successfully by checking exit code
+if (($? == 0))
+then
+    # generate workflow
+    cd ${WORKFLOW_NAME}
+    pycbc_submit_dax ${WORKFLOW_NAME}.dax
+fi
