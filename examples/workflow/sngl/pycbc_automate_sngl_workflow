@@ -8,6 +8,7 @@ INSTALLED_CONFIG_FILES=${2}
 
 # get midnight from yesterday in form of MM/DD/YYYY
 YESTERDAY=`date -u --date="yesterday" +"%x"`
+YESTERDAY=4/18/2015
 
 # convert midnight to GPS time and analyze a day of data
 GPS_START_TIME=`lalapps_tconvert ${YESTERDAY}`
@@ -26,8 +27,8 @@ WORKFLOW_NAME=sngl_${SEARCH}_${DAY}
 HTMLDIR=/home/${USER}/public_html/daily_cbc_offline/${SEARCH}/${MONTH}/${DAY}
 
 # mkdir a dir for the month in the format YYYYMM
-mkdir -p /home/${USER}/sngl_er6/${SEARCH}/${MONTH}
-cd /home/${USER}/sngl_er6/${SEARCH}/${MONTH}
+mkdir -p /home/${USER}/sngl_er6/${SEARCH}/${MONTH}/${DAY}
+cd /home/${USER}/sngl_er6/${SEARCH}/${MONTH}/${DAY}
 
 # generate the workflow
 pycbc_make_sngl_workflow --name ${WORKFLOW_NAME} \
@@ -35,12 +36,11 @@ pycbc_make_sngl_workflow --name ${WORKFLOW_NAME} \
                          --config-overrides workflow:start-time:${GPS_START_TIME} \
                                             workflow:end-time:${GPS_END_TIME} \
                                             workflow:workflow-html-basedir:${HTMLDIR} \
-                                            html:analysis-subtitle:${MONTH}/${DAY}
+                                            html:analysis-subtitle:${MONTH}/${DAY} > ${WORKFLOW_NAME}.out 2>&1
 
 # check if workflow generated successfully by checking exit code
 if (($? == 0))
 then
     # generate workflow
-    cd ${WORKFLOW_NAME}
-    pycbc_submit_dax ${WORKFLOW_NAME}.dax
+    pycbc_basic_pegasus_plan ${WORKFLOW_NAME}.dax /usr1/${USER}/sngl/${SEARCH} >> ${WORKFLOW_NAME}.out 2>&1
 fi

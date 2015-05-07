@@ -54,13 +54,12 @@ logging.basicConfig(format='%(asctime)s:%(levelname)s : %(message)s',
                     level=logging.INFO,datefmt='%I:%M:%S')
 
 # directory names
-runDir = os.path.join(os.getcwd(), args.name)
+runDir = os.getcwd()
 datafindDir = runDir + '/datafind'
 fulldataDir = runDir + '/full_data'
 outputDir = runDir + '/output'
 configDir = outputDir + '/config'
-# FIXME: temporary fix to work so daily pages can see segment XML files
-segDir = outputDir #+ '/segments'
+segDir = outputDir + '/segments'
 cacheDir = outputDir + '/cache'
 cssStaticDir = pycbc.results.__path__[0] + '/static/css/'
 jsStaticDir = pycbc.results.__path__[0] + '/static/js/'
@@ -486,8 +485,10 @@ for trigs_ifo, trigs_ifo_filelist in zip(trigs_ifos, trigs_ifos_filelists):
         cache = trigs_tag_filelist.convert_to_lal_cache()
 
         # write cache file (mimics old workflow filename)
+        if not os.path.exists(cacheDir):
+             os.makedirs(cacheDir)
         tag = '_'.join(trigs_tag).upper()
-        filename = outputDir+'/'+trigs_ifo+'-INSPIRAL_'+tag+'.cache'
+        filename = cacheDir+'/'+trigs_ifo+'-INSPIRAL_'+tag+'.cache'
         cache.tofile(open(filename, 'w'))
 
 # group tmpltbank files by IFO and loop over IFOs
@@ -502,8 +503,6 @@ for banks_ifo, banks_ifo_filelist in zip(banks_ifos, banks_ifos_filelists):
         cache = trigs_tag_filelist.convert_to_lal_cache()
 
         # write cache file (mimics old workflow file)
-        if not os.path.exists(cacheDir):
-             os.makedirs(cacheDir)
         tag = '_'.join(trigs_tag).upper()
         filename = cacheDir+'/'+trigs_ifo+'-TMPLTBANK_'+tag+'.cache'
         cache.tofile(open(filename, 'w'))
