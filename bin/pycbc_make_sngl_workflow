@@ -61,10 +61,6 @@ outputDir = runDir + '/output'
 configDir = outputDir + '/config'
 segDir = outputDir + '/segments'
 cacheDir = outputDir + '/cache'
-cssStaticDir = pycbc.results.__path__[0] + '/static/css/'
-jsStaticDir = pycbc.results.__path__[0] + '/static/js/'
-cssDir = outputDir + '/css'
-jsDir = outputDir + '/js'
 
 # change into run dir
 if not os.path.exists(runDir):
@@ -501,12 +497,6 @@ for banks_ifo, banks_ifo_filelist in zip(banks_ifos, banks_ifos_filelists):
         tag = '_'.join(trigs_tag).upper()
         filename = cacheDir+'/'+trigs_ifo+'-TMPLTBANK_'+tag+'.cache'
         cache.tofile(open(filename, 'w'))
-
-# copy css and js to output dir
-if not os.path.exists(cssDir):
-    shutil.copytree(cssStaticDir, cssDir)
-if not os.path.exists(jsDir):
-    shutil.copytree(jsStaticDir, jsDir)
 
 # write configuration file
 if not os.path.exists(configDir):
