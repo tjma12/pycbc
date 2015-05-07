@@ -8,7 +8,6 @@ INSTALLED_CONFIG_FILES=${2}
 
 # get midnight from yesterday in form of MM/DD/YYYY
 YESTERDAY=`date -u --date="yesterday" +"%x"`
-YESTERDAY=4/18/2015
 
 # convert midnight to GPS time and analyze a day of data
 GPS_START_TIME=`lalapps_tconvert ${YESTERDAY}`
