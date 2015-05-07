@@ -83,11 +83,6 @@ html_workflow = _workflow.Workflow(args, 'html')
 # get segments
 scienceSegs, segFileList = _workflow.setup_segment_generation(workflow, segDir)
 
-# if not any science segments then exit
-if not len(scienceSegs):
-    logging.info('There were no science segments.')
-    sys.exit(1)
-
 # get frames
 datafinds, scienceSegs = _workflow.setup_datafind_workflow(workflow, scienceSegs,
                            datafindDir, segFileList)

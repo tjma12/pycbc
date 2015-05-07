@@ -37,9 +37,5 @@ pycbc_make_sngl_workflow --name ${WORKFLOW_NAME} \
                                             workflow:workflow-html-basedir:${HTMLDIR} \
                                             html:analysis-subtitle:${MONTH}/${DAY} > ${WORKFLOW_NAME}.out 2>&1
 
-# check if workflow generated successfully by checking exit code
-if (($? == 0))
-then
-    # generate workflow
-    pycbc_basic_pegasus_plan ${WORKFLOW_NAME}.dax /usr1/${USER}/sngl/${SEARCH} >> ${WORKFLOW_NAME}.out 2>&1
-fi
+# generate workflow
+pycbc_basic_pegasus_plan ${WORKFLOW_NAME}.dax /usr1/${USER}/sngl/${SEARCH} >> ${WORKFLOW_NAME}.out 2>&1
