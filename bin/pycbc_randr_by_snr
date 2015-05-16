@@ -58,7 +58,8 @@ def r_beta_distribution(rmax, alpha, beta, N=1):
 
 def beta_weight(r, rmax, alpha, beta):
     x = r/rmax
-    return x**(3.-alpha) * (1.-x)**(1.-beta) * rmax * special.beta(alpha, beta)
+    return 4.*numpy.pi * rmax**3. * x**(3.-alpha) * (1.-x)**(1.-beta) * \
+        special.beta(alpha, beta)
     
 def r_in_modified_gamma(r0, rmax, theta=2., r0_at='mode', N=1):
     # FIXME: I think I can generalize beyond k=2
@@ -96,7 +97,7 @@ def get_weights(distribution, r, r1, r2):
         weight = 4.*numpy.pi*(r2-r1) * r**2. 
     elif distribution == "logdist":
         min_vol = (4./3)*numpy.pi*r1**3.
-        weight = r**3. * numpy.log(r2/r1)
+        weight = 4.*numpy.pi * r**3. * numpy.log(r2/r1)
     else:
         raise ValueError("unrecognized distribution %s" %(distribution))
     return min_vol, weight
