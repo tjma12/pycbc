@@ -175,6 +175,7 @@ def plot_snrchi(results, ifo=None, labels=[], colors=[], plot_newsnrs=[],
         ax.set_ylabel(r'$\chi_r^2$')
     else:
         ax.set_ylabel(r'$\chi^2$')
+    ax.set_title(ifo)
     ax.loglog()
     ax.set_xlim(plt_xmin, plt_xmax)
     ax.set_ylim(plt_ymin, plt_ymax)
