@@ -15,6 +15,13 @@ from pycbc.plot import efficiency
 from pycbc.plot import plot_volumes
 
 
+def print_command_line(args):
+    """
+    Prints the commands given to the program to run; this can be added to the
+    bottom of an html page.
+    """
+    return "Created with:<br />%s" %(' '.join(args))
+
 parser = OptionParser()
 parser.add_option('-c', '--cache-file', help='Required. Cache file containing result databases.')
 parser.add_option('-l', '--layer-config-file', help='Required. A config file containing the layer parameters to use.') 
@@ -26,7 +33,9 @@ parser.add_option('-N', '--min-ninj', type='int', default=2, help='Minimum numbe
 parser.add_option('', '--print-relative-error', action='store_true', default=False, help='Turn on to print relative errors instead of absolute errors.')
 parser.add_option('', '--use-distance-bins', action='store_true', default=False, help="If turned on, will use distance bins to compute sensitive volumes, rather than the standard Monte Carlo method of using the average of the integrand. Generally, this will yield larger variance, so turn this on with caution.")
 parser.add_option('-A', '--astrophysical-prior', metavar='AST_DISTR.cfg', help='Use the astrophysical prior provided in the given config file. Default is to use whatever was used in the injection set.')
+parser.add_option('-G', '--use-global-norm', action='store_true', default=False, help='Normalize volumes in each tile such that they add up to the total volume across all volumes. In this case, the volumes in each tile give the contribution of that tile to the whole. Otherwise, the volume in each tile is as if the universe only contained signals in that tile.')
 parser.add_option('-p', '--additional-plots-cache', metavar='FILE1.cache[,FILE2.cache,...]', help='Load additional plots for each cube from the given cache file(s). To specify multiple cache files, comma separate each file name. All cache files must have used the same layer-configuration-file.')
+parser.add_option('', '--skip-volume-vs-stat-plots', action='store_true', default=False, help="Don't create volume vs. stat plots.")
 parser.add_option('-o', '--output-dir', help='Directory to save results to.')
 parser.add_option('-u', '--user-tag', default='', help='Add a user tag to all output files.')
 parser.add_option('', '--colormap', default='hot', help='What color map to use for fractional gain plots. Default is hot.')
@@ -148,7 +157,10 @@ if opts.additional_plots_cache is not None:
         else:
             pcubes = this_layer.parents
         for pcube in pcubes:
-            add_plots = plot_cache[pcube.id_in_layer]
+            try:
+                add_plots = plot_cache[pcube.id_in_layer]
+            except KeyError:
+                continue
             for plot in add_plots:
                 # create a symbolic link to the plot in the layer's image dir
                 figname = '%s%s%s/%s' %(this_layer.root_dir,
@@ -192,10 +204,23 @@ while next_layer is not None:
     next_layer.set_ranking_params(ranking_stat, opts.rank_by, stat_label)
     next_layer = next_layer.sub_layer
 
-# set the total number of injections for each cube
-total_Ninj = len(results)
-for pcube in efficiency.get_all_cubes_in_layers(layers[0]):
-    pcube.total_num_inj = total_Ninj
+# if desired, set the global normalization
+if opts.use_global_norm:
+    # if no astro prior is specified, this is just the total number of
+    # injections
+    if astprior is None:
+        norm = float(len(results))
+    # otherwise, the norm is the sum of the weights of all of the injections
+    else:
+        weights = numpy.array([distributions.convert_distribution(
+            x, x.inj_mass_distr, astprior) for x in results
+            if x.inj_weight is not None])
+        norm = weights.sum() 
+    # now set the global norm for all the phyper cubes
+    for pcube in efficiency.get_all_cubes_in_layers(layers[0]):
+        pcube.global_norm = norm
+        # also set the total number of samples for computing variance
+        pcube.total_nsamples = len(results)
 
 # if min, max vol aren't specified, get the minimum/maximum volumes across
 # all of the tiles
@@ -214,6 +239,10 @@ maxvol = opts.maxvol
 #minvol = None
 #maxvol = None
 
+# for keeping track of commands, we'll add the arguments used to create this
+# at the bottom of the html pages
+command_line = print_command_line(sys.argv)
+
 # Plot
 print "plotting"
 html_tmplt = '%slevel_%i-%s_%i.html'
@@ -224,11 +253,12 @@ while this_layer is not None:
     # for the bottom layer, we'll also create html and volume vs stat plots
     # for the children
     this_is_lowest_layer = this_layer.sub_layer is None
-    plot_volumes.plot_volume_vs_stat_from_layer(this_layer, min_stat,
-        max_stat, stat_label, include_children=this_is_lowest_layer,
-        user_tag=opts.user_tag, min_ninj=opts.min_ninj, logx=stat_dist,
-        logy=True, nbins=20, threshold=opts.threshold, dpi=opts.dpi,
-        verbose=True)
+    if not opts.skip_volume_vs_stat_plots:
+        plot_volumes.plot_volume_vs_stat_from_layer(this_layer, min_stat,
+            max_stat, stat_label, include_children=this_is_lowest_layer,
+            user_tag=opts.user_tag, min_ninj=opts.min_ninj, logx=stat_dist,
+            logy=True, nbins=20, threshold=opts.threshold, dpi=opts.dpi,
+            verbose=True)
 
     plot_volumes.plot_volumes_from_layer(this_layer, opts.threshold,
         user_tag=opts.user_tag, min_ninj=opts.min_ninj,
@@ -253,7 +283,8 @@ while this_layer is not None:
                 'child', ii)
             child.create_html_page(this_layer.root_dir, html_name,
                 mapper=None, threshold=opts.threshold,
-                print_relative_error=opts.print_relative_error)
+                print_relative_error=opts.print_relative_error,
+                comments=command_line)
     # the top layer page is the index page; otherwise we use the template
     for ii,parent in enumerate(this_layer.parents):
         if this_layer.level == 0:
@@ -263,6 +294,7 @@ while this_layer is not None:
                 'parent', ii)
         parent.create_html_page(this_layer.root_dir, html_name,
             mapper=mapper, threshold=opts.threshold,
-            print_relative_error=opts.print_relative_error)
+            print_relative_error=opts.print_relative_error,
+            comments=command_line)
 
     this_layer = this_layer.super_layer

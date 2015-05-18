@@ -38,6 +38,14 @@ from glue import segments
 from pycbc import distributions
 from pycbc.plot import plot_utils
 
+from scipy import special
+def beta_weight(result, alpha, beta):
+    rmax = numpy.sqrt((numpy.array(result.inj_sigma.values())**2.).sum())/4.
+    r = result.distance
+    x = r/rmax
+    return x**(1.-alpha) * (1.-x)**(1.-beta) * rmax * r**2.* special.beta(
+        alpha, beta)
+
 #
 #
 #   HTML utilities
@@ -86,7 +94,8 @@ class PHyperCube:
         self._rank_by = None
         self._stat_label = None
         self._nsamples = None
-        self.total_num_inj = None
+        self.global_norm = None
+        self.total_nsamples = None
         self._cached_volumes = {}
         self._astro_prior = None
         # for grouping together phyper cubes
@@ -269,6 +278,9 @@ class PHyperCube:
                 volume, err_high = self._integrate_efficiency(threshold,
                     self._ranking_stat, self._rank_by, self.astro_prior)
                 err_low = err_high
+            # FIXME
+            if volume < 1e-7:
+                volume = err_low = err_high = 0.
             self._cached_volumes[threshold,self._ranking_stat,self._rank_by] =\
                 volume, err_high, err_low
             return volume, err_high, err_low
@@ -298,11 +310,36 @@ class PHyperCube:
             weights = numpy.array([distributions.convert_distribution(
                 x, x.inj_mass_distr, astro_prior) for x in self.data
                 if x.inj_weight is not None])
-            integrand *= weights / weights.mean()
-        elif self.total_num_inj is not None:
-            # correct for the number of injections in this tile
-            integrand *= self.nsamples / float(self.total_num_inj)
-        return integrand.mean(), integrand.std()/numpy.sqrt(len(integrand))
+        else:
+            weights = numpy.ones(self.nsamples, dtype=float)
+        # apply the appropriate norm to the weights
+        if self.global_norm is not None:
+            weights /= self.global_norm
+            # if using a global norm, we'll set the number of samples to be the
+            # total number of injections across the entire space, so that
+            # volumes add to the total volume
+            Nsamples = self.total_nsamples
+        else:
+            # otherwise, we're assuming a universe in which signals only exist
+            # in this cube
+            weights /= weights.sum()
+            Nsamples = self.nsamples
+        mean = (weights * integrand).sum()
+        # calucate a weighted variance
+        # Note: there are multiple definitions in the literature as to what
+        # to use for the standard error of a weighted mean. See D. Gatz and
+        # L. Smith "The Standard Error of a Weighted Mean Concentration" (1995)
+        # for a discussion. Here, I'll use:
+        # var(x_w) = sum_i w_i (x_i - <x_w>)**2
+        # where <x_w> is the weighted mean
+        # [wikipedia.org/Variance#Discrete_random_variable]. Note that the
+        # weights are  normalized, so I don't have to divide by anything).
+        # The standard error of the mean is then:
+        # d<x_w> = \sqrt(var(x_w)/Nsamples)
+        # It might be good to check this eventually using a boot strap method.
+        var = (weights * (integrand - mean)**2.).sum()
+        return mean, numpy.sqrt(var/Nsamples)
+
 
     def clear_cache(self):
         """
@@ -312,13 +349,14 @@ class PHyperCube:
 
     def create_html_page(self, out_dir, html_name, threshold,
             mainplots_widths=1000, print_relative_error=False,
-            mapper=None):
+            mapper=None, comments=None):
         """
         Create's self html page. See _create_html_page for details.
         """
         _create_html_page(self, out_dir, html_name, threshold,
             mainplots_widths=mainplots_widths,
-            print_relative_error=print_relative_error, mapper=mapper)
+            print_relative_error=print_relative_error, mapper=mapper,
+            comments=comments)
         self.html_page = '%s/%s' %(out_dir, html_name)
 
 
@@ -337,7 +375,6 @@ class PHyperCube:
         integrand = numpy.array([\
             float(_isfound(x, ranking_stat, compare_operator, threshold)) \
             for x in self.data])
-        integrand *= weights
 
         min_dist = distances.min()
         max_dist = distances.max()
@@ -363,11 +400,12 @@ class PHyperCube:
             if len(group_idx) == 0:
                 continue
             this_integrand = integrand[group_idx]
-            if astro_prior is not None:
-                these_weights = weights[group_idx]
-                this_integrand = this_integrand * these_weights / \
-                    these_weights.mean()
-            thisEff[kk] = this_integrand.mean() / weights[group_idx].mean()
+            these_weights = weights[group_idx]
+            thisEff[kk] = (this_integrand * these_weights).sum() / \
+                these_weights.sum()
+            #this_integrand = this_integrand * these_weights / \
+            #    these_weights.sum()
+            #thisEff[kk] = this_integrand.mean()
 
         numFound = thisEff * numTotal
         numMissed = numTotal - numFound
@@ -596,7 +634,7 @@ class PHyperCubeGain:
     def create_html_page(self, out_dir, html_name, test_threshold,
         ref_threshold, test_label='', ref_label='', mainplots_widths=1000,
         print_relative_error=False,
-        mapper=None):
+        mapper=None, comments=None):
         """
         Create's self html page. See _create_html_page for details.
         """
@@ -604,7 +642,8 @@ class PHyperCubeGain:
             ref_threshold=ref_threshold,
             test_label=test_label, ref_label=ref_label,
             mainplots_widths=mainplots_widths,
-            print_relative_error=print_relative_error, mapper=mapper)
+            print_relative_error=print_relative_error, mapper=mapper,
+            comments=comments)
         self.html_page = '%s/%s' %(out_dir, html_name)
 
 
@@ -736,7 +775,7 @@ def format_volume_text(V, err_plus, err_minus=None, include_units=True,
 
 def _create_html_page(phyper_cube, out_dir, html_name, threshold=None,
         ref_threshold=None, mainplots_widths=1000, print_relative_error=False,
-        mapper=None):
+        mapper=None, comments=None):
     """
     Creates an html page for the given PHyperCube.
     """
@@ -865,6 +904,10 @@ def _create_html_page(phyper_cube, out_dir, html_name, threshold=None,
                 os.path.dirname(os.path.abspath(html_page)))
             print >> f, '<a href="%s"><img src="%s" width="%i" /></a>' %(
                 figname, figname, int(mainplots_widths/2))
+    # add any comments
+    if comments is not None:
+        print >> f, "<hr />"
+        print >> f, comments
     # close out
     print >> f, '</body>\n</html>'
     f.close()
@@ -873,7 +916,7 @@ def _create_html_page(phyper_cube, out_dir, html_name, threshold=None,
 def _create_gain_html_page(phyper_cube, out_dir, html_name, threshold=None,
         ref_threshold=None, test_label='', ref_label='',
         mainplots_widths=1000, print_relative_error=False,
-        mapper=None):
+        mapper=None, comments=None):
     """
     Creates an html page for the given PHyperCubeGain.
     """
@@ -921,8 +964,10 @@ def _create_gain_html_page(phyper_cube, out_dir, html_name, threshold=None,
     print >> f, "</h1>"
     # print some basic info about this cube
     print >> f, "<h2>"
-    print >> f, "Total number of injections: %i<br />" %(
-        phyper_cube.nsamples)
+    print >> f, "Test number of injections: %i<br />" %(
+        phyper_cube.test_cube.nsamples)
+    print >> f, "Reference number of injections: %i<br />" %(
+        phyper_cube.reference_cube.nsamples)
     if phyper_cube.reference_cube.astro_prior is not None:
         print >> f, "Astrophysical prior: %s<br />" %(
             phyper_cube.reference_cube.astro_prior.description)
@@ -1017,7 +1062,10 @@ def _create_gain_html_page(phyper_cube, out_dir, html_name, threshold=None,
                 os.path.dirname(os.path.abspath(html_page)))
             print >> f, '<a href="%s"><img src="%s" width="%i" /></a>' %(
                 figname, figname, int(mainplots_widths/2))
-
+    # add any comments
+    if comments is not None:
+        print >> f, "<hr />"
+        print >> f, comments
     # close out
     print >> f, '</body>\n</html>'
     f.close()

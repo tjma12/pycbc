@@ -38,6 +38,14 @@ def get_stat_info(opt):
     return stat, stat_label
 
 
+def print_command_line(args):
+    """
+    Prints the commands given to the program to run; this can be added to the
+    bottom of an html page.
+    """
+    return "Created with:<br />%s" %(' '.join(args))
+
+
 parser = OptionParser()
 parser.add_option('-c', '--test-cache-file', metavar="TESTFILE.CACHE[:TESTLABEL]", help='Required. Cache file containing test result databases. Can also specify a label for the test results; if none provided "test" will be used.')
 parser.add_option('', '--reference-cache-file',  metavar="REFFILE.CACHE[:REFLABEL]", help='Required if reference-stat is not "optimal". Cache file containing reference result databases. Can also specify a label for the reference results; if none provided "reference" will be used.')
@@ -56,6 +64,7 @@ parser.add_option('', '--print-relative-error', action='store_true', default=Fal
 parser.add_option('', '--use-distance-bins', action='store_true', default=False, help="If turned on, will use distance bins to compute sensitive volumes, rather than the standard Monte Carlo method of using the average of the integrand. Generally, this will yield larger variance, so turn this on with caution.")
 parser.add_option('-A', '--astrophysical-prior', metavar='AST_DISTR.cfg', help='Use the astrophysical prior provided in the given config file. Default is to use whatever was used in the injection set.')
 parser.add_option('', '--include-volume-plots', action='store_true', default=False, help='Include the volume tile plots of the test and reference results to the summary html pages.')
+parser.add_option('-G', '--use-global-norm', action='store_true', default=False, help='Normalize volumes in each tile such that they add up to the total volume across all volumes. In this case, the volumes in each tile give the contribution of that tile to the whole. Otherwise, the volume in each tile is as if the universe only contained signals in that tile.')
 parser.add_option('-p', '--additional-plots-cache', metavar='FILE1.cache[,FILE2.cache,...]', help='Load additional plots for each cube from the given cache file(s). To specify multiple cache files, comma separate each file name. All cache files must have used the same layer-configuration-file.')
 parser.add_option('-o', '--output-dir', help='Directory to save results to.')
 parser.add_option('-u', '--user-tag', default='', help='Add a user tag to all output files.')
@@ -266,6 +275,33 @@ while next_layer is not None:
         'reference')
     next_layer = next_layer.sub_layer
 
+# if desired, set the global normalization
+if opts.use_global_norm:
+    # if no astro prior is specified, this is just the total number of
+    # injections
+    if astprior is None:
+        norm = float(len(results))
+    # otherwise, the norm is the sum of the weights of all of the injections
+    else:
+        test_weights = numpy.array([distributions.convert_distribution(
+            x, x.inj_mass_distr, astprior) for x in test_results
+            if x.inj_weight is not None])
+        test_norm = test_weights.sum() 
+        ref_weights = numpy.array([distributions.convert_distribution(
+            x, x.inj_mass_distr, astprior) for x in ref_results
+            if x.inj_weight is not None])
+        ref_norm = ref_weights.sum() 
+    # now set the global norm for all the phyper cubes
+    for pcube in efficiency.get_all_cubes_in_layers(layers[0]):
+        pcube.test_cube.global_norm = test_norm
+        pcube.reference_cube.global_norm = ref_norm
+        # also set the total number of injections for computing the variance
+        pcube.test_cube.total_nsamples = len(test_results)
+        pcube.reference_cube.total_nsamples = len(ref_results)
+
+print "len test:", len(test_results)
+print "len ref:", len(ref_results)
+
 # if min, max gain aren't specified, get the minimum/maximum gains across
 # all of the tiles
 mingain = opts.mingain
@@ -299,6 +335,9 @@ maxgain = opts.maxgain
 #    maxvol = max(test_Vs.max(), ref_Vs.max())
 minvol = maxvol = None
 
+# for keeping track of commands, we'll add the arguments used to create this
+# at the bottom of the html pages
+command_line = print_command_line(sys.argv)
 
 # Plot
 print "plotting"
@@ -341,7 +380,8 @@ while this_layer is not None:
                 'child', ii)
             child.create_html_page(this_layer.root_dir, html_name,
                 test_threshold, ref_threshold, mapper=None,
-                print_relative_error=opts.print_relative_error)
+                print_relative_error=opts.print_relative_error,
+                comments=command_line)
     # the top layer page is the index page; otherwise we use the template
     for ii,parent in enumerate(this_layer.parents):
         if this_layer.level == 0:
@@ -352,6 +392,7 @@ while this_layer is not None:
         parent.create_html_page(this_layer.root_dir, html_name, test_threshold,
             ref_threshold, test_label=test_label, ref_label=ref_label,
             mapper=mapper,
-            print_relative_error=opts.print_relative_error)
+            print_relative_error=opts.print_relative_error,
+            comments=command_line)
 
     this_layer = this_layer.super_layer
