@@ -9,7 +9,6 @@ from matplotlib import patches as mplpatches
 from matplotlib import pyplot
 pyplot.rcParams.update({
     "text.usetex": True,
-    "text.verticalalignment": "center",
     "font.family": "serif",
     "font.serif": ["Computer Modern"],
     "font.weight": "bold",
@@ -147,8 +146,12 @@ def _plot_tiles(ax, zvals, plus_errs, minus_errs, phyper_cubes,
             # because we are not printing units, we can just use
             # format_volume_text, for the text string, even though the zvals
             # may be gains and not volumes
+            if Z != 0. and (Z >= 100000. or Z < 0.01):
+                use_scin = True
+            else:
+                use_scin = False
             txt_str = efficiency.format_volume_text(Z, err_plus, err_minus,
-                include_units=False, use_scientific_notation=False,
+                include_units=False, use_scientific_notation=use_scin,
                 use_relative_err=print_relative_err)
             if logx:
                 txtx = numpy.log10(10**min(x) + (10**max(x)-10**min(x))/2.)
@@ -188,8 +191,7 @@ def _plot_tiles(ax, zvals, plus_errs, minus_errs, phyper_cubes,
         # formatter
         if vmin > zvals.min() or vmax < zvals.max() and cbformat is None:
             bounded_formatter = plot_utils.create_bounded_colorbar_formatter(
-                cb.formatter.locs[0], cb.formatter.locs[1],
-                formatter=cb.formatter)
+                vmin, vmax, formatter=cb.formatter)
             cb.formatter = bounded_formatter
             cb.update_ticks()
     else:
@@ -646,12 +648,12 @@ def plot_volumes(phyper_cubes, xarg, xlabel, yarg, ylabel, threshold,
     plus_errs = volumes[:,1]
     minus_errs = volumes[:,2]
     if minvol is None:
-        minvol = Vs.min()
+        minvol = Vs[numpy.nonzero(Vs)].min()
     if maxvol is None:
         maxvol = Vs.max()
     # we'll divide by the closest power of 10 of the smallest value of these
     # volumes
-    conversion_factor = numpy.floor(numpy.log10(Vs.min()))#minvol))
+    conversion_factor = numpy.floor(numpy.log10(minvol))
     Vs *= 10**(-conversion_factor)
     plus_errs *= 10**(-conversion_factor)
     minus_errs *= 10**(-conversion_factor)
