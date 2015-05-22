@@ -2,7 +2,6 @@ import os
 from matplotlib import pyplot
 pyplot.rcParams.update({
     "text.usetex": True,
-    "text.verticalalignment": "center",
     #"lines.markersize": 12,
     #"lines.markeredgewidth": 2,
     "font.family": "serif",

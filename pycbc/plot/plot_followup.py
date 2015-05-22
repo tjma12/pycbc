@@ -5,7 +5,6 @@ height = 3.0
 dpi = 300
 pyplot.rcParams.update({
     "text.usetex": True,
-    "text.verticalalignment": "center",
     "font.family": "serif",
     "font.serif": ["Computer Modern Roman"],
     "font.weight": "bold",
@@ -16,8 +15,7 @@ pyplot.rcParams.update({
     "axes.labelsize": 14,
     "xtick.labelsize": 10,
     "ytick.labelsize": 10,
-    "legend.fontsize": 10,
-    "scatter.markersize": 1
+    "legend.fontsize": 10
     })
 import math
 import numpy
