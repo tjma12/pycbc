@@ -139,65 +139,46 @@ def empty_hatched_plot(ax, hatch="x"):
 #
 #############################################
 
-class Result:
+class Template(object):
     """
-    Class to store results for plot plotting.
-    To see the arguments that are stored and what can be plotted,
-    run Result.plottable_arguments()
+    Class to store information about a template for plotting.
     """
-    def __init__(self):
-        self.apprx = None
-        self.unique_id = None
-        self.m1 = None
-        self.m2 = None
-        self.s1z = None
-        self.s2z = None
-        self.distance = None
-        self.inclination = None
-        self.inj_sigma = {}
-        self.inj_min_vol = None
-        self.inj_weight = None
-        self.inj_mass_distr = None
-        self.inj_spin_distr = None
-        self.astro_prior = None
-        self.effectualness = None
-        self.weight_function = None
-        self.weight = None
-        self.snr = None
-        self.snr_std = None
-        self.chisq = None
-        self.chisq_std = None
-        self.chisq_dof = None
-        self.new_snr = None
-        self.new_snr_std = None
-        self.num_samples = None
-        self.database = None
-        self.coinc_event_id = None
-        self.tmplt_id = None
-        self.tmplt_m1 = None
-        self.tmplt_m2 = None
-        self.tmplt_s1z = None
-        self.tmplt_s2z = None
+    # we'll group the various parameters by type
+    _intrinsic_params = [
+        'mass1', 'mass2', 'spin1x', 'spin1y', 'spin1z',
+        'spin2x', 'spin2y', 'spin2z', 'eccentricity',
+        'lambda1', 'lambda2'
+        ]
+    _extrinsic_params = [
+        'phi0', 'inclination', 'distance'
+        ]
+    _waveform_params = [
+        'sample_rate', 'segment_length', 'duration',
+        'f_min', 'f_ref', 'f_max',
+        'axis_choice', 'modes_flag',
+        'amp_order', 'phase_order', 'spin_order', 'tidal_order',
+        'approximant', 'taper'
+        ]
+    _ifo_params = [
+        'ifo', 'sigma'
+        ]
+    _tmplt_weight_params = ['weight', 'weight_function']
+    _id_name = 'tmplt_id'
+    __slots__ = [_id_name] + _intrinsic_params + _extrinsic_params + \
+        _waveform_params + _ifo_params + _tmplt_weight_params
 
-    @property
-    def optimal_snr(self):
-        """
-        Returns the quadrature sum of the inj_sigmas divided by the distance.
-        """
-        return numpy.sqrt((numpy.array(self.inj_sigma.values())**2.).sum()) \
-            / self.distance
+    def __init__(self, **kwargs):
+        default = None
+        [setattr(self, param, kwargs.pop(param, default)) for param in \
+            self.__slots__]
+        # if anything left, raise an error, as it is an unrecognized argument
+        if kwargs != {}:
+            raise ValueError("unrecognized arguments: %s" %(kwargs.keys()))
 
-    @property
-    def mass1(self):
-        return self.m1
-
-    @property
-    def mass2(self):
-        return self.m2
-
+    # some other derived parameters
     @property
     def mtotal(self):
-        return self.m1 + self.m2
+        return self.mass1 + self.mass2
 
     @property
     def mtotal_s(self):
@@ -205,11 +186,11 @@ class Result:
 
     @property
     def q(self):
-        return self.m1 / self.m2
+        return self.mass1 / self.mass2
 
     @property
     def eta(self):
-        return self.m1*self.m2 / self.mtotal**2.
+        return self.mass1*self.mass2 / self.mtotal**2.
 
     @property
     def mchirp(self):
@@ -217,247 +198,233 @@ class Result:
 
     @property
     def chi(self):
-        return (self.m1*self.s1z + self.m2*self.s2z) / self.mtotal
+        return (self.mass1*self.spin1z + self.mass2*self.spin2z) / self.mtotal
+
+    # some short cuts
+    @property
+    def m1(self):
+        return self.mass1
 
     @property
-    def tmplt_mtotal(self):
-        return self.tmplt_m1 + self.tmplt_m2
+    def m2(self):
+        return self.mass2
 
-    @property
-    def tmplt_q(self):
-        return self.tmplt_m1/self.tmplt_m2
-
-    @property
-    def tmplt_eta(self):
-        return self.tmplt_m1*self.tmplt_m2 / self.tmplt_mtotal**2.
-
-    @property
-    def tmplt_mchirp(self):
-        return self.tmplt_eta**(3./5)*self.tmplt_mtotal
-
-    @property
-    def tmplt_chi(self):
-        return (self.tmplt_m1*self.tmplt_s1z + self.tmplt_m2*self.tmplt_s2z) \
-            / self.tmplt_mtotal
-        
-    def tau0(self, f0 = 40):
-        return (5./(256*numpy.pi*f0*self.eta))*(numpy.pi*self.mtotal*lal.MTSUN_SI*f0)**(-5./3.)
-    
-    def v0(self, f0 = 40):
-        return (2*numpy.pi*f0*self.mtotal*lal.MTSUN_SI)**(1./3)
-
-    @property
-    def plottable_arguments(self):
+    def tau0(self, f0=None):
         """
-        Returns a string listing all plottable arguments.
+        Returns tau0. If f0 is not specified, uses self.f_min.
         """
-        return """
-m1: Injected mass of the larger object, in solar masses.
-m2: Injected mass of the larger object, in solar masses.
-s1z: The larger object's projection of the dimensionless spin along the orbital angular momentum.
-s2z: Same as s1z, but for the smaller body.
-mtotal: The injected total mass, in solar masses.
-q: The injected mass ratio.
-mchirp: The injected chirp mass, in solar masses.
-eta: The injected symmetric-mass ratio.
-tmplt_{m1|m2|...|eta}: The equivalent physical parameters of the best-matching template.
-eff_dist: The effective distance of the injection, in Mpc.
-dist: The injection's distance, in Mpc.
-inclination: The injection's inclination.
-effectualness: The injection's effectualness.
-snr: The measured expectation value of the SNR, as found by calc_exval.
-snr_std: The standard deviation of the expectation value of the SNR, as found by calc_exval.
-chisq: The measured expectation value of chisq, as found by calc_exval.
-chisq_dof: The number of degress of freedom of the chisq.
-chisq_std: The standard deviation of the expectation value of chisq, as found by calc_exval.
-new_snr: The measured expectation value of new SNR, as found by calc_exval.
-new_snr_std: The standard deviation of the expectation value of new_snr, as found by calc_exval.
-"""
+        if f0 is None:
+            f0 = self.f_min
+        return (5./(256 * numpy.pi * f0 * self.eta)) * \
+            (numpy.pi * self.mtotal_s * f0)**(-5./3.)
+   
+    def v0(self, f0=None):
+        """
+        Returns the velocity at f0, as a fraction of c. If f0 is not
+        specified, uses self.f_min.
+        """
+        if f0 is None:
+            f0 = self.f_min
+        return (2*numpy.pi* f0 * self.mtotal_s)**(1./3)
 
-def parse_results_cache(cache_file):
-    filenames = []
-    f = open(cache_file, 'r')
-    for line in f:
-        thisfile = line.split('\n')[0]
-        if os.path.exists(thisfile):
-            filenames.append(thisfile)
-    f.close()
-    return filenames
+    @property
+    def s1(self):
+        return numpy.array([self.spin1x, self.spin1y, self.spin1z])
 
-def get_injection_results(filenames, load_inj_distribution=False,
-        weight_function='uniform', result_table_name='overlap_results',
-        ifo=None, verbose=False):
-    sqlquery = """
-        SELECT
-            sim.process_id, sim.waveform, sim.simulation_id,
-            sim.mass1, sim.mass2, sim.spin1z, sim.spin2z,
-            sim.distance, sim.inclination, tmplt.event_id,
-            tmplt.mass1, tmplt.mass2, tmplt.spin1z, tmplt.spin2z,
-            res.effectualness, res.snr, res.snr_std,
-            tw.weight, res.chisq, res.chisq_std, res.chisq_dof, res.new_snr,
-            res.new_snr_std, res.num_successes, res.sample_rate,
-            res.coinc_event_id
-        FROM
-            %s AS res""" %(result_table_name) + """
-        JOIN
-            sim_inspiral as sim, coinc_event_map as map
-        ON
-            sim.simulation_id == map.event_id AND
-            map.coinc_event_id == res.coinc_event_id
-        JOIN
-            sngl_inspiral AS tmplt, coinc_event_map AS mapB
-        ON
-            mapB.coinc_event_id == map.coinc_event_id AND
-            mapB.event_id == tmplt.event_id
-        JOIN
-            coinc_definer AS cdef, coinc_event AS cev
-        ON
-            cev.coinc_event_id == res.coinc_event_id AND
-            cdef.coinc_def_id == cev.coinc_def_id
-        JOIN
-            tmplt_weights as tw
-        ON
-            tw.tmplt_id == tmplt.event_id AND
-            tw.weight_function == cdef.description
-        WHERE
-            cdef.description == ?
+    @property
+    def s1x(self):
+        return self.spin1x
+
+    @property
+    def s1y(self):
+        return self.spin1y
+
+    @property
+    def s1z(self):
+        return self.spin1z
+
+    @property
+    def s2(self):
+        return numpy.array([self.spin2x, self.spin2y, self.spin2z])
+
+    @property
+    def s2x(self):
+        return self.spin2x
+
+    @property
+    def s2y(self):
+        return self.spin2y
+
+    @property
+    def s2z(self):
+        return self.spin2z
+
+    @property
+    def apprx(self):
+        return self.approximant
+
+
+class SnglIFOInjectionParams(object):
     """
-    if ifo is not None:
-        sqlquery += 'AND res.ifo == ?'
-        get_args = (weight_function, ifo)
-    else:
-        get_args = (weight_function,)
-    results = []
-    id_map = {}
-    idx = 0
-    inj_dists = {}
-    for ii,thisfile in enumerate(filenames):
-        if verbose:
-            print >> sys.stdout, "%i / %i\r" %(ii+1, len(filenames)),
-            sys.stdout.flush()
-        if not thisfile.endswith('.sqlite'):
-            continue
-        connection = sqlite3.connect(thisfile)
-        cursor = connection.cursor()
+    Class that stores information about an injeciton in a specific detector.
+    """
+    __slots__ = ['ifo', 'end_time', 'end_time_ns', 'sigma']
+    def __init__(self, **kwargs):
+        [setattr(self, param, kwargs.pop(param, None)) for param in \
+            self.__slots__]
+        # if anything left, raise an error, as it is an unrecognized argument
+        if kwargs != {}:
+            raise ValueError("unrecognized arguments: %s" %(kwargs.keys()))
+
+
+
+class Injection(Template):
+    """
+    Class to store information about an injection for plotting. Inherits from
+    Template, and adds slots for sky location.
+    """
+    # add information about location and time in geocentric coordinates, and
+    # the distribution from which the injections were drawn
+    _inj_params = [
+        'geocent_end_time', 'geocent_end_time_ns', 'ra', 'dec', 'astro_prior',
+        'min_vol', 'vol_weight', 'mass_distr', 'spin_distr'
+        ]
+    # we'll override some of the parameters in TemplateResult
+    _id_name = 'simulation_id'
+    # sngl_ifos will be a dictionary pointing to instances of
+    # SnglIFOInjectionParams
+    _ifo_params = ['sngl_ifos']
+    __slots__ = [_id_name] + Template._intrinsic_params + \
+        Template._extrinsic_params + Template._waveform_params + \
+        _ifo_params + _inj_params
+
+
+class Result(object):
+    """
+    Class to store a template with an injection, along with event information
+    (ranking stat, etc.) for purposes of plotting.
+
+    Information about the template and the injection (masses, spins, etc.)
+    are stored as instances of Template and Injection; since these contain
+    static slots, this saves on memory if not all information is needed.
+
+    Information about a trigger (snr, chisq, etc.) are stored as attributes
+    of the class. Since the class has no __slots__, additional statistics
+    may be added on the fly.
+
+    The class can also be used to only store information about a trigger;
+    i.e., adding an injection is not necessary.
+    
+    To make accessing intrinsic parameters easier, set the psuedoattr_class;
+    this will make the __slots__ of either the injection or the template
+    attributes of this class. See set_psuedoattr_class for details. 
+
+    To see the arguments that are stored and what can be plotted,
+    run Result.plottable_arguments()
+    """
+    _psuedoattr_class = None
+
+    def __init__(self, unique_id=None, database=None, event_id=None,
+            tmplt=None, injection=None):
+        self.unique_id = None
+        self.database = None
+        self.event_id = None
+        if tmplt is None:
+            self.template = Template()
+        else:
+            self.template = tmplt
+        if injection is None:
+            self.injection = Injection()
+        else:
+            self.injection = injection
+        self._psuedoattr_class = None
+        self.snr = None
+        self.chisq = None
+        self.chisq_dof = None
+        self.new_snr = None
+        self.false_alarm_rate = None
+        self.false_alarm_probability = None
+        self.livetime = None
+        # banksim paraameters
+        self.effectualness = None
+        self.snr_std = None
+        self.chisq_std = None
+        self.new_snr_std = None
+        self.num_samples = None
+
+    def __getattr__(self, name):
+        """
+        This will get called if __getattribute__ fails. Thus, we can use
+        this to access attributes of the psuedoattr_class, if it is set.
+        """
         try:
-            for (sim_proc_id, apprx, sim_id, m1, m2, s1z, s2z, dist, inc,
-                    tmplt_evid, tmplt_m1, tmplt_m2, tmplt_s1z,
-                    tmplt_s2z, ff, snr,
-                    snr_std, weight, chisq, chisq_std, chisq_dof, new_snr,
-                    new_snr_std, nsamp, sample_rate, ceid) in \
-                    cursor.execute(sqlquery, get_args):
-                thisRes = Result()
-                thisRes.unique_id = idx
-                id_map[thisfile, sim_id] = idx
-                idx += 1
-                thisRes.apprx = apprx
-                # ensure that m1 is always > m2
-                if m2 > m1:
-                    thisRes.m1 = m2
-                    thisRes.m2 = m1
-                    thisRes.s1z = s2z
-                    thisRes.s2z = s1z
-                else:
-                    thisRes.m1 = m1
-                    thisRes.m2 = m2
-                    thisRes.s1z = s1z
-                    thisRes.s2z = s2z
-                thisRes.mtotal = m1+m2
-                thisRes.distance = dist
-                thisRes.inclination = inc
-                thisRes.tmplt_id = tmplt_evid
-                thisRes.tmplt_m1 = tmplt_m1
-                thisRes.tmplt_m2 = tmplt_m2
-                thisRes.tmplt_s1z = tmplt_s1z
-                thisRes.tmplt_s2z = tmplt_s2z
-                thisRes.effectualness = ff
-                thisRes.snr = snr
-                thisRes.snr_std = snr_std
-                thisRes.weight_function = weight_function
-                thisRes.weight = weight
-                thisRes.chisq = chisq
-                thisRes.chisq_sts = chisq_std
-                thisRes.chisq_dof = chisq_dof
-                thisRes.new_snr = new_snr
-                thisRes.new_snr_std = new_snr_std
-                thisRes.num_samples = nsamp
-                thisRes.sample_rate = sample_rate
-                thisRes.database = thisfile
-                thisRes.coinc_event_id = ceid
-                # get the injection distribution information
-                if load_inj_distribution:
-                    try:
-                        thisRes.inj_mass_distr = inj_dists[thisfile,
-                            sim_proc_id]
-                    except KeyError:
-                        # need to load the distribution
-                        inj_dists[thisfile, sim_proc_id] = \
-                            distributions.get_inspinj_distribution(connection,
-                            sim_proc_id)
-                        thisRes.inj_mass_distr = inj_dists[thisfile,
-                            sim_proc_id]
-                results.append(thisRes)
+            return object.__getattribute__(self,
+                '_psuedoattr_class').__getattribute__(name)
+        except AttributeError:
+            raise AttributeError("'Result' object has no attribute '%s'" %(
+                name))
 
-            # try to get the sim_inspiral_params table
-            tables = cursor.execute(
-                'SELECT name FROM sqlite_master WHERE type == "table"'
-                ).fetchall()
-            if ('sim_inspiral_params',) in tables:
-                sipquery = """
-                    SELECT
-                        sip.simulation_id, sip.ifo, sip.sigmasq,
-                        sip.min_vol, sip.weight
-                    FROM
-                        sim_inspiral_params AS sip
-                    """
-                for simid, ifo, sigmasq, min_vol, inj_weight in cursor.execute(
-                        sipquery):
-                    try:
-                        thisRes = results[id_map[thisfile, simid]]
-                    except KeyError:
-                        continue
-                    if sigmasq is not None:
-                        thisRes.inj_sigma[ifo] = numpy.sqrt(sigmasq)
-                    thisRes.inj_min_vol = min_vol
-                    thisRes.inj_weight = inj_weight
+    def __setattr__(self, name, value):
+        """
+        First tries to set the attribute in self. If name is not in self's
+        dict, next tries to set the attribute in self._psuedoattr_class.
+        If that fails with an AttributeError, it then adds the name to self's
+        namespace with the associated value.
+        """
+        try:
+            object.__getattribute__(self,
+                '_psuedoattr_class').__setattr__(name, value)
+        except AttributeError:
+            object.__setattr__(self, name, value)
 
-        except sqlite3.OperationalError:
-            cursor.close()
-            connection.close()
-            continue
-        except sqlite3.DatabaseError:
-            cursor.close()
-            connection.close()
-            print "Database Error: %s" % thisfile
-            continue
+    @property
+    def psuedoattr_class(self):
+        return self._psuedoattr_class
 
-        connection.close()
+    def set_psuedoattr_class(self, psuedo_class):
+        """
+        Makes the __slots__ of the given class visible to self's namespace.
+        An error is raised if self and psuedo_class have any attributes
+        that have the same name, as this can lead to unexpected behavior.
 
-    if verbose:
-        print >> sys.stdout, ""
+        Parameters
+        ----------
+        psuedo_class: {self.template|self.injection}
+            An instance of a class to make visible. Should be either self's
+            injection or template (but can be any instance of any class).
+        """
+        # check that there is no overlap
+        attribute_overlap = [name for name in self.__dict__ \
+            if name in psuedo_class.__slots__]
+        if attribute_overlap != []:
+            raise AttributeError(
+                "attributes %s " %(', '.join(attribute_overlap)) + \
+                "are common to self and the given psuedo_class. Delete " +\
+                "these attributes from self if you wish to use the given " +\
+                "psuedo_class.")
+        self._psuedoattr_class = psuedo_class
+        
+    @property
+    def optimal_snr(self):
+        """
+        Returns the quadrature sum of the inj_sigmas divided by the distance.
+        """
+        return numpy.sqrt((numpy.array([ifo.sigma \
+            for ifo in self.injection.sngl_ifos])**2.).sum()) / \
+            self.injection.distance
 
-    return results, id_map
+    # some short cuts
+    @property
+    def tmplt(self):
+        return self.template
+
+    @property
+    def inj(self):
+        return self.injection
 
 
-def get_templates(filename, old_format = False):
-    templates = []
-    connection = sqlite3.connect(filename)
-    if old_format:
-        sqlquery = 'select sngl.mass1, sngl.mass2, sngl.alpha3, sngl.alpha6 from sngl_inspiral as sngl'
-    else:
-        sqlquery = 'select sngl.mass1, sngl.mass2, sngl.spin1z, sngl.spin2z from sngl_inspiral as sngl'
-    for m1, m2, s1z, s2z in connection.cursor().execute(sqlquery):
-        thisRes = Result()
-        thisRes.m1 = m1
-        thisRes.m2 = m2
-        thisRes.mtotal = m1+m2
-        thisRes.s1z = s1z
-        thisRes.s2z = s2z
-        templates.append(thisRes)
-    connection.close()
-    return templates
-
-
+# FIXME: dataUtils in pylal should be moved to pycbc, and the get_val in there
+# used instead
 def get_arg(row, arg):
     """
     Retrieves an arbitrary argument from the given row object. For speed, the
@@ -514,6 +481,237 @@ def apply_cut(results, test_dict):
 def slice_results(results, test_dict):
     return apply_cut(results, test_dict)
 
+
+
+#############################################
+#
+#   Tools to load a results into memory
+#
+#############################################
+def parse_results_cache(cache_file):
+    filenames = []
+    f = open(cache_file, 'r')
+    for line in f:
+        thisfile = line.split('\n')[0]
+        if os.path.exists(thisfile):
+            filenames.append(thisfile)
+    f.close()
+    return filenames
+
+def get_injection_results(filenames, load_inj_distribution=False,
+        weight_function='uniform', result_table_name='overlap_results',
+        ifo=None, verbose=False):
+    sqlquery = """
+        SELECT
+            sim.process_id, sim.waveform, sim.simulation_id,
+            sim.mass1, sim.mass2, sim.spin1x, sim.spin1y, sim.spin1z,
+            sim.spin2x, sim.spin2y, sim.spin2z,
+            sim.distance, sim.inclination, sim.alpha0, sim.alpha1,
+            tmplt.event_id, tmplt.mass1, tmplt.mass2,
+            tmplt.spin1x, tmplt.spin1y, tmplt.spin1z,
+            tmplt.spin2x, tmplt.spin2y, tmplt.spin2z,
+            res.effectualness, res.snr, res.snr_std,
+            tw.weight, res.chisq, res.chisq_std, res.chisq_dof, res.new_snr,
+            res.new_snr_std, res.num_successes, res.sample_rate,
+            res.coinc_event_id
+        FROM
+            %s AS res""" %(result_table_name) + """
+        JOIN
+            sim_inspiral as sim, coinc_event_map as map
+        ON
+            sim.simulation_id == map.event_id AND
+            map.coinc_event_id == res.coinc_event_id
+        JOIN
+            sngl_inspiral AS tmplt, coinc_event_map AS mapB
+        ON
+            mapB.coinc_event_id == map.coinc_event_id AND
+            mapB.event_id == tmplt.event_id
+        JOIN
+            coinc_definer AS cdef, coinc_event AS cev
+        ON
+            cev.coinc_event_id == res.coinc_event_id AND
+            cdef.coinc_def_id == cev.coinc_def_id
+        JOIN
+            tmplt_weights as tw
+        ON
+            tw.tmplt_id == tmplt.event_id AND
+            tw.weight_function == cdef.description
+        WHERE
+            cdef.description == ?
+    """
+    if ifo is not None:
+        sqlquery += 'AND res.ifo == ?'
+        get_args = (weight_function, ifo)
+    else:
+        get_args = (weight_function,)
+    results = []
+    id_map = {}
+    idx = 0
+    inj_dists = {}
+    for ii,thisfile in enumerate(filenames):
+        if verbose:
+            print >> sys.stdout, "%i / %i\r" %(ii+1, len(filenames)),
+            sys.stdout.flush()
+        if not thisfile.endswith('.sqlite'):
+            continue
+        connection = sqlite3.connect(thisfile)
+        cursor = connection.cursor()
+        try:
+            for (sim_proc_id, apprx, sim_id, m1, m2, s1x, s1y, s1z,
+                    s2x, s2y, s2z, dist, inc, min_vol, inj_weight,
+                    tmplt_evid, tmplt_m1, tmplt_m2, tmplt_s1z,
+                    tmplt_s2z, ff, snr,
+                    snr_std, weight, chisq, chisq_std, chisq_dof, new_snr,
+                    new_snr_std, nsamp, sample_rate, ceid) in \
+                    cursor.execute(sqlquery, get_args):
+                thisRes = Result()
+                # id information
+                thisRes.unique_id = idx
+                thisRes.database = thisfile 
+                thisRes.event_id = ceid
+                id_map[thisfile, sim_id] = idx
+                idx += 1
+                # Set the injection parameters: we'll make the injection
+                # the psuedo class so we can access its attributes directly
+                thisRes.set_psuedoattr_class(thisRes.injection)
+                thisRes.injection.simulation_id = sim_id
+                thisRes.injection.approximant = apprx
+                # ensure that m1 is always > m2
+                if m2 > m1:
+                    thisRes.injection.mass1 = m2
+                    thisRes.injection.mass2 = m1
+                    thisRes.injection.spin1x = s2x
+                    thisRes.injection.spin1y = s2y
+                    thisRes.injection.spin1z = s2z
+                    thisRes.injection.spin2x = s1x
+                    thisRes.injection.spin2y = s1y
+                    thisRes.injection.spin2z = s1z
+                else:
+                    thisRes.injection.mass1 = m1
+                    thisRes.injection.mass2 = m2
+                    thisRes.injection.spin1x = s1x
+                    thisRes.injection.spin1y = s1y
+                    thisRes.injection.spin1z = s1z
+                    thisRes.injection.spin2x = s2x
+                    thisRes.injection.spin2y = s2y
+                    thisRes.injection.spin2z = s2z
+                thisRes.injection.distance = dist
+                thisRes.injection.inclination = inc
+                thisRes.injection.injection.min_vol = min_vol
+                thisRes.injection.vol_weight = inj_weight
+                thisRes.injection.sample_rate = sample_rate
+                # set the template parameters
+                thisRes.template.tmplt_id = tmplt_evid
+                thisRes.template.mass1 = tmplt_m1
+                thisRes.template.mass2 = tmplt_m2
+                thisRes.template.spin1x = tmplt_s1x
+                thisRes.template.spin1y = tmplt_s1y
+                thisRes.template.spin1z = tmplt_s1z
+                thisRes.template.spin2x = tmplt_s2x
+                thisRes.template.spin2y = tmplt_s2y
+                thisRes.template.spin2z = tmplt_s2z
+                thisRes.template.weight_function = weight_function
+                thisRes.template.weight = weight
+                # statistics
+                thisRes.effectualness = ff
+                thisRes.snr = snr
+                thisRes.snr_std = snr_std
+                thisRes.chisq = chisq
+                thisRes.chisq_sts = chisq_std
+                thisRes.chisq_dof = chisq_dof
+                thisRes.new_snr = new_snr
+                thisRes.new_snr_std = new_snr_std
+                thisRes.num_samples = nsamp
+                # get the injection distribution information
+                if load_inj_distribution:
+                    try:
+                        thisRes.injection.mass_distr = inj_dists[thisfile,
+                            sim_proc_id]
+                    except KeyError:
+                        # need to load the distribution
+                        inj_dists[thisfile, sim_proc_id] = \
+                            distributions.get_inspinj_distribution(connection,
+                            sim_proc_id)
+                        thisRes.injection.mass_distr = inj_dists[thisfile,
+                            sim_proc_id]
+                results.append(thisRes)
+
+            # try to get the sim_inspiral_params table
+            tables = cursor.execute(
+                'SELECT name FROM sqlite_master WHERE type == "table"'
+                ).fetchall()
+            if ('sim_inspiral_params',) in tables:
+                # older codes stored the minimum volume and injection weight in
+                # the sim_inspiral_params table. If we find that column, we'll
+                # get the min_vol and vol_weight from there. Otherwise, the
+                # min_vol and the vol_weight are set above. 
+                column_names = [name[1] for name in cursor.execute(
+                    "PRAGMA table_info(sim_inspiral_params)").fetchall()]
+                if "min_vol" in column_names and "weight" in column_names:
+                    sipquery = """
+                        SELECT
+                            sip.simulation_id, sip.ifo, sip.sigmasq,
+                            sip.min_vol, sip.weight
+                        FROM
+                            sim_inspiral_params AS sip
+                        """
+                else:
+                    sipquery = """
+                        SELECT
+                            sip.simulation_id, sip.ifo, sip.sigmasq,
+                            NULL, NULL
+                        FROM
+                            sim_inspiral_params AS sip
+                        """
+                for simid, ifo, sigmasq, min_vol, vol_weight in cursor.execute(
+                        sipquery):
+                    try:
+                        thisRes = results[id_map[thisfile, simid]]
+                    except KeyError:
+                        continue
+                    sngl_params = SnglIFOInjectionParams(ifo=ifo,
+                        sigma=numpy.sqrt(sigmasq))
+                    thisRes.injection.ifos[ifo] = sngl_params
+                    if min_vol is not None:
+                        thisRes.injection.min_vol = min_vol
+                    if inj_weight is not None:
+                        thisRes.injection.vol_weight = vol_weight
+
+        except sqlite3.OperationalError:
+            cursor.close()
+            connection.close()
+            continue
+        except sqlite3.DatabaseError:
+            cursor.close()
+            connection.close()
+            print "Database Error: %s" % thisfile
+            continue
+
+        connection.close()
+
+    if verbose:
+        print >> sys.stdout, ""
+
+    return results, id_map
+
+
+def get_templates(filename, old_format=False):
+    templates = []
+    connection = sqlite3.connect(filename)
+    if old_format:
+        sqlquery = 'select sngl.mass1, sngl.mass2, sngl.alpha3, sngl.alpha6 from sngl_inspiral as sngl'
+    else:
+        sqlquery = 'select sngl.mass1, sngl.mass2, sngl.spin1z, sngl.spin2z from sngl_inspiral as sngl'
+    for m1, m2, s1z, s2z in connection.cursor().execute(sqlquery):
+        thisRes = Result()
+        thisRes.set_psuedoattr_class(thisRes.template)
+        thisRes.m1 = m1
+        thisRes.m2 = m2
+        thisRes.s1z = s1z
+        thisRes.s2z = s2z
+        templates.append(thisRes)
+    connection.close()
+    return templates
 
 #
 #
