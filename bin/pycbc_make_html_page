@@ -1,0 +1,211 @@
+#!/usr/bin/python
+
+# Copyright (C) 2015 Christopher M. Biwer
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation; either version 3 of the License, or (at your
+# option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Generals
+# Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+import argparse
+import os
+import random
+import shutil
+
+from jinja2 import Environment, FileSystemLoader
+
+from glue import segments
+
+import pycbc.results
+from pycbc.results.render import setup_template_render
+from pycbc.workflow import segment
+
+def examine_dir(cwd):
+    """
+    Looks in a directory and returns all subdirs and files.
+    """
+
+    # list everything in this directory and loop over them
+    names = os.listdir(cwd)
+    dirs, nondirs = [], []
+    for name in names:
+
+        # if it is a directory append the dir list
+        # else append the nondirs list
+        if os.path.isdir(os.path.join(cwd, name)):
+            dirs.append(name)
+        else:
+            nondirs.append(name)
+
+    return cwd, dirs, nondirs
+
+class Directory():
+    """
+    Class used to relate all sub-directories and files in a directory.
+    """
+
+    # a list for all instances of this class
+    instances = []
+
+    def __init__(self, path, plots_dir):
+
+        # find all subdirs and filenames in directory
+        cwd, subdirs, filenames = examine_dir(path)
+
+        # save subdirs
+        self.path    = path.replace(plots_dir, '')
+        self.subdirs = [Directory(path+'/'+subdir, plots_dir) for subdir in subdirs]
+
+        # loop over all filenames
+        self.files = []
+        for filename in filenames:
+
+            # check if this is a configuration file for a file
+            extension = filename.split('.')[-1]
+            config_filename = filename.replace(extension, 'file.ini')
+            if filename.endswith('file.ini'):
+                continue
+
+            # check if configuration file exists for file
+            elif not os.path.exists(config_filename):
+                self.config_filename = None
+
+            # append file to directory
+            self.files.append(File(plots_dir+'/'+self.path+'/'+filename,
+                                   plots_dir+'/'+self.path+'/'+config_filename))
+
+        # append to class list
+        self.instances.append(self)
+
+    def name(self):
+        """
+        Returns the name of the directory.
+        """
+
+        print self.path.split('/')[-1]
+        return self.path.split('/')[-1]
+
+    def title(self):
+        """
+        Returns a string of the directory name with underscores as spaces
+        and capslock.
+        """
+
+        return self.path.split('/')[-1].replace('_', ' ').upper()
+
+    def level(self):
+        """
+        Counts how far into the output filesystem this directory is.
+        """
+
+        return self.path.count('/')
+
+class File():
+    """
+    Class used to keep track of files.
+    """
+
+    def __init__(self, path, config_path):
+
+        # save paths
+        self.path        = path
+        self.config_path = config_path
+
+    def filename(self):
+        """
+        Returns filename of File as a string.
+        """
+
+        return self.path.split('/')[-1]
+
+    def render(self):
+        """
+        Renders a template for the File using the configuration file if present.
+        """
+
+        return setup_template_render(self.path, self.config_path)
+
+# parse command line
+parser = argparse.ArgumentParser(usage='pycbc_make_html_page \
+[--options]',
+                  description="Create static html pages of a filesystem's content.")
+parser.add_argument('-f', '--template-file', type=str,
+                  help='Template file to use for skeleton html page.')
+parser.add_argument('-b', '--output-path', type=str,
+                  help='Path on web server for main html page.')
+parser.add_argument('-p', '--plots-dir', type=str,
+                  help='Path to the directory that contains plots.')
+parser.add_argument('-t', '--analysis-title', type=str,
+                  help='Title to include at the top of each page.',
+                  default=False)
+parser.add_argument('-s', '--analysis-subtitle', type=str,
+                  help='Subtitle to include at the top of each page.',
+                  default=False)
+parser.add_argument('-v', '--verbose', action='store_true',
+                  help='Print extra debugging information.', default=False)
+opts = parser.parse_args()
+
+# edit command line options
+analysis_title = opts.analysis_title.strip('"').rstrip('"')
+analysis_subtitle = opts.analysis_subtitle.strip('"').rstrip('"')
+input_template = opts.template_file.split('/')[-1]
+input_path = opts.template_file.rstrip(input_template)
+
+# setup template
+env = Environment(loader=FileSystemLoader(input_path))
+template = env.get_template(input_template)
+
+# find all subdirs and the top-level subdirs
+Directory(opts.plots_dir, opts.plots_dir)
+dirs   = [cwd for cwd in Directory.instances]
+dirs_0 = [cwd for cwd in Directory.instances if cwd.path.count('/') == 1]
+
+# sort alphanumerically
+# FIXME: could move this into Directory when subdirs and files are appended
+dirs.sort(key=lambda x: x.title())
+for cwd in dirs:
+    cwd.subdirs.sort(key=lambda x: x.title())
+    cwd.files.sort(key=lambda x: x.path)
+dirs_0.sort(key=lambda x: x.title())
+
+# loop over all directories
+for cwd in dirs:
+
+    # render template
+    context = {'analysis_title'    : analysis_title,
+               'analysis_subtitle' : analysis_subtitle,
+               'dirs_0'            : dirs_0,
+               'dir'               : cwd,
+               'dot_dot_str'       : cwd.level() * '../',
+               'plots_dir'         : opts.plots_dir}
+    output = template.render(context)
+
+    # save html page
+    if not os.path.exists(opts.output_path+cwd.path):
+        os.makedirs(opts.output_path+cwd.path)
+    with open(opts.output_path+cwd.path+'/index.html', "wb") as fp:
+        fp.write(output)
+
+# copy all files to html directory
+for cwd in dirs:
+    for file in cwd.files:
+        shutil.copy(file.path, opts.output_path+'/'+cwd.path+'/'+file.filename())
+
+# copy css and js files to html directory
+cssDir       = pycbc.results.__path__[0] + '/static/css/'
+jsDir        = pycbc.results.__path__[0] + '/static/js/'
+cssOutputDir = opts.output_path + '/static/css/'
+jsOutputDir  = opts.output_path + '/static/js/'
+if not os.path.exists(cssOutputDir):
+    shutil.copytree(cssDir, cssOutputDir)
+if not os.path.exists(jsOutputDir):
+    shutil.copytree(jsDir, jsOutputDir)

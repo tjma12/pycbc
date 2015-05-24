@@ -25,18 +25,14 @@
 produces event triggers
 """
 import glue.ligolw.utils.process
-import lal
-import numpy
-import copy
+import lal, numpy, copy, os.path, pycbc
 
-import pycbc
 from pycbc.types import Array
 from pycbc.types import convert_to_process_params_dict
 from pycbc.scheme import schemed
 from pycbc.detector import Detector
 
 from . import coinc
-
 
 @schemed("pycbc.events.threshold_")
 def threshold(series, value):
@@ -67,7 +63,7 @@ def fc_cluster_over_window_fast(times, values, window_length):
         The reduced list of indices of the SNR values
     """
     if window_length <= 0:
-        return times
+        return numpy.arange(len(times))
 
     from scipy.weave import inline
     indices = numpy.zeros(len(times), dtype=int)
@@ -131,10 +127,10 @@ def findchirp_cluster_over_window(times, values, window_length):
 def newsnr(snr, reduced_x2, q=6.):
     """Calculate the re-weighted SNR statistic ('newSNR') from given SNR and
     reduced chi-squared values. See http://arxiv.org/abs/1208.3491 for
-    definition.
+    definition. Previous implementation in glue/ligolw/lsctables.py
     """
-    newsnr = numpy.array(snr, ndmin=1)
-    reduced_x2 = numpy.array(reduced_x2, ndmin=1)
+    newsnr = numpy.array(snr, ndmin=1, dtype=numpy.float64)
+    reduced_x2 = numpy.array(reduced_x2, ndmin=1, dtype=numpy.float64)
 
     # newsnr is only different from snr if reduced chisq > 1
     ind = numpy.where(reduced_x2 > 1.)[0]
@@ -145,6 +141,19 @@ def newsnr(snr, reduced_x2, q=6.):
     else:
         return newsnr[0]
 
+def effsnr(snr, reduced_x2, fac=250.):
+    """Calculate the effective SNR statistic. See (S5y1 paper) for definition.
+    Previous implementation in glue/ligolw/lsctables.py
+    """
+    snr = numpy.array(snr, ndmin=1, dtype=numpy.float64)
+    rchisq = numpy.array(reduced_x2, ndmin=1, dtype=numpy.float64)
+    effsnr = snr / (1 + snr ** 2 / fac) ** 0.25 / rchisq ** 0.25
+
+    if len(effsnr) > 1:
+        return effsnr
+    else:
+        return effsnr[0]
+
 class EventManager(object):
     def __init__(self, opt, column, column_types, **kwds):
         self.opt = opt
@@ -154,7 +163,7 @@ class EventManager(object):
         for column, coltype in zip (column, column_types):
             self.event_dtype.append( (column, coltype) )
 
-        self.events = numpy.events = numpy.array([], dtype=self.event_dtype)
+        self.events = numpy.array([], dtype=self.event_dtype)
         self.template_params = []
         self.template_index = -1
         self.template_events = numpy.array([], dtype=self.event_dtype)
@@ -176,7 +185,7 @@ class EventManager(object):
     def chisq_threshold(self, value, num_bins, delta=0):
         remove = []
         for i, event in enumerate(self.events):
-            xi = event['chisq'] / (event['chisq_dof'] + delta * event['snr'].conj() * event['snr'])
+            xi = event['chisq'] / (event['chisq_dof'] / 2 + 1 + delta * event['snr'].conj() * event['snr'])
             if xi > value:
                 remove.append(i)
         self.events = numpy.delete(self.events, remove)
@@ -188,7 +197,7 @@ class EventManager(object):
             raise RuntimeError('Chi-square test must be enabled in order to use newsnr threshold')
 
         remove = [i for i, e in enumerate(self.events) if \
-            newsnr(abs(e['snr']), e['chisq'] / (2 * e['chisq_dof'] - 2)) < threshold]
+            newsnr(abs(e['snr']), e['chisq'] / e['chisq_dof']) < threshold]
         self.events = numpy.delete(self.events, remove)
 
     def maximize_over_bank(self, tcolumn, column, window):
@@ -274,10 +283,17 @@ class EventManager(object):
         self.events = numpy.append(self.events, self.template_events)
         self.template_events = numpy.array([], dtype=self.event_dtype)
 
+    def make_output_dir(self, outname):
+        path = os.path.dirname(outname)
+        if path != '':
+            if not os.path.exists(path) and path is not None:
+                os.makedirs(path)
+
     def write_events(self, outname):
         """ Write the found events to a sngl inspiral table
-        """
-
+        """ 
+        self.make_output_dir(outname)
+        
         if '.xml' in outname:
             self.write_to_xml(outname)
         elif '.hdf' in outname:
@@ -285,52 +301,63 @@ class EventManager(object):
         else:
             raise ValueError('Cannot write to this format')
     
-    def write_to_hdf(self, outname):
-        import h5py
-        f = h5py.File(outname, 'w')
+    def write_to_hdf(self, outname):  
+        class fw(object):
+            def __init__(self, name, prefix):
+                import h5py
+                self.f = h5py.File(name, 'w')
+                self.prefix = prefix
+
+            def __setitem__(self, name, data):
+                col = self.prefix + '/' + name
+                self.f.create_dataset(col, data=data, 
+                                      compression='gzip', 
+                                      compression_opts=9,
+                                      shuffle=True)
+                       
+        self.events.sort(order='template_id')
+              
+        # Template id hack
+        m1 = numpy.array([p['tmplt'].mass1 for p in self.template_params], dtype=numpy.float32)
+        m2 = numpy.array([p['tmplt'].mass2 for p in self.template_params], dtype=numpy.float32)
+        s1 = numpy.array([p['tmplt'].spin1z for p in self.template_params], dtype=numpy.float32)
+        s2 = numpy.array([p['tmplt'].spin2z for p in self.template_params], dtype=numpy.float32) 
+        th = numpy.zeros(len(m1), dtype=int)
+        for j, v in enumerate(zip(m1, m2, s1, s2)):
+            th[j] = hash(v)
+        
+        tid = self.events['template_id']
+        f = fw(outname, self.opt.channel_name[0:2])
         
         if len(self.events):
-            f.create_dataset('snr', data=abs(self.events['snr']), compression='gzip')
-            f.create_dataset('coa_phase', data=numpy.angle(self.events['snr']), compression='gzip')
-            f.create_dataset('chisq', data=abs(self.events['chisq']), compression='gzip')
-            f.create_dataset('bank_chisq', data=abs(self.events['bank_chisq']), compression='gzip')
-            f.create_dataset('cont_chisq', data=abs(self.events['cont_chisq']), compression='gzip')
+            f['snr'] = abs(self.events['snr'])
+            f['coa_phase'] = numpy.angle(self.events['snr'])
+            f['chisq'] = self.events['chisq']
+            f['bank_chisq'] = self.events['bank_chisq']
+            f['cont_chisq'] = self.events['cont_chisq']
+            f['end_time'] = self.events['time_index'] / float(self.opt.sample_rate) + self.opt.gps_start_time
             
-            end_time = self.events['time_index'] / float(self.opt.sample_rate) + self.opt.gps_start_time
-            f.create_dataset('end_time', data=end_time, compression='gzip')
-            
-            tid = self.events['template_id']
             template_sigmasq = numpy.array([t['sigmasq'] for t in self.template_params], dtype=numpy.float32)
-            f.create_dataset('sigmasq', data=template_sigmasq[tid], compression='gzip')
+            f['sigmasq'] = template_sigmasq[tid]
          
-            cont_dof = self.opt.autochi_number_points if self.opt.autochi_onesided else 2 * self.opt.autochi_number_points
-            f.create_dataset('cont_chisq_dof', data=numpy.repeat(cont_dof, len(self.events)), compression='gzip')
-            f.create_dataset('bank_chisq_dof', data=numpy.repeat(10, len(self.events)), compression='gzip')        
+            # FIXME: Can we get this value from the autochisq instance?
+            cont_dof = self.opt.autochi_number_points
+            if self.opt.autochi_onesided is None:
+                cont_dof = cont_dof * 2
+            if self.opt.autochi_two_phase:
+                cont_dof = cont_dof * 2
+            if self.opt.autochi_max_valued_dof:
+                cont_dof = self.opt.autochi_max_valued_dof
+            f['cont_chisq_dof'] = numpy.repeat(cont_dof, len(self.events))
+            f['bank_chisq_dof'] = numpy.repeat(10, len(self.events))
 
             if 'chisq_dof' in self.events.dtype.names:
-                f.create_dataset('chisq_dof', data=self.events['chisq_dof'] / 2 + 1, compression='gzip')
+                f['chisq_dof'] = self.events['chisq_dof'] / 2 + 1
             else:
-                f.create_dataset('chisq_dof', data=numpy.zeros(len(self.events)), compression='gzip')    
-        
-            # Template id hack
-            m1 = numpy.array([p['tmplt'].mass1 for p in self.template_params], dtype=numpy.float32)
-            m2 = numpy.array([p['tmplt'].mass2 for p in self.template_params], dtype=numpy.float32)
-            s1 = numpy.array([p['tmplt'].spin1z for p in self.template_params], dtype=numpy.float32)
-            s2 = numpy.array([p['tmplt'].spin2z for p in self.template_params], dtype=numpy.float32)
-        
-            th = numpy.zeros(len(m1), dtype=int)
-            for j, v in enumerate(zip(m1, m2, s1, s2)):
-                th[j] = hash(v)
-            th_sort = th.argsort()
-        
-            th_map  = {}
-            for j, h in enumerate(th[th_sort]):
-                th_map[h] = j
+                f['chisq_dof'] = numpy.zeros(len(self.events))
+
+            f['template_hash'] = th[tid]
             
-            rtid = numpy.array([th_map[h] for h in th])
-            f.create_dataset('template_id', data=rtid[tid], compression='gzip') 
-    
-        f.attrs['ifo'] = self.opt.channel_name[0:2]
         if self.opt.trig_start_time:
             f['search/start_time'] = numpy.array([self.opt.trig_start_time])
         else:
@@ -448,10 +475,15 @@ class EventManager(object):
             if hasattr(self.opt, 'autochi_number_points')\
                     and self.opt.autochi_number_points>0:
                 row.cont_chisq = event['cont_chisq']
-                if (self.opt.autochi_onesided):
-                    row.cont_chisq_dof = self.opt.autochi_number_points
-                else:
-                    row.cont_chisq_dof = 2*self.opt.autochi_number_points
+                # FIXME: Can this come from the autochisq instance?
+                cont_dof = self.opt.autochi_number_points
+                if self.opt.autochi_onesided is None:
+                    cont_dof = cont_dof * 2
+                if self.opt.autochi_two_phase:
+                    cont_dof = cont_dof * 2
+                if self.opt.autochi_max_valued_dof:
+                    cont_dof = self.opt.autochi_max_valued_dof
+                row.cont_chisq_dof = cont_dof
 
             row.eff_distance = sigmasq ** (0.5) / abs(snr)
             row.snr = abs(snr)
@@ -644,7 +676,7 @@ class EventManagerMultiDet(EventManager):
         for column, coltype in zip (column, column_types):
             self.event_dtype.append( (column, coltype) )
 
-        self.events = numpy.events = numpy.array([], dtype=self.event_dtype)
+        self.events = numpy.array([], dtype=self.event_dtype)
         self.event_id_map = {}
         self.event_index = 0
         self.template_params = []
@@ -716,6 +748,7 @@ class EventManagerMultiDet(EventManager):
     def write_events(self, outname):
         """ Write the found events to a sngl inspiral table 
         """
+        self.make_output_dir(outname)
         outdoc = glue.ligolw.ligolw.Document()
         outdoc.appendChild(glue.ligolw.ligolw.LIGO_LW())
 
@@ -809,7 +842,6 @@ class EventManagerMultiDet(EventManager):
     def _add_coincs_to_output(self, coinc_def_table, coinc_event_table,
                               coinc_event_map_table, time_slide_table,
                               coinc_inspiral_table, sngl_table, proc_id):
-        from pylal.ligolw_sstinca import coinc_inspiral_end_time
         # FIXME: This shouldn't live here
         # FIXME: More choices would be good
         magic_number = 6.0
@@ -914,7 +946,7 @@ class EventManagerMultiDet(EventManager):
         coinc_def_row.search_coinc_type = 0
         coinc_def_table.append(coinc_def_row)
 
-__all__ = ['threshold_and_cluster', 'newsnr',
+__all__ = ['threshold_and_cluster', 'newsnr', 'effsnr',
            'findchirp_cluster_over_window', 'fc_cluster_over_window_fast',
            'threshold', 'cluster_reduce',
            'EventManager', 'EventManagerMultiDet']

@@ -24,23 +24,31 @@ In order to install PyCBC, you need to have installed the following prerequisite
 
     A version of lalsuite and glue are installed on LDG clusters, but you may want to build your own version. Please see :ref:`lalsuite_install` for instructions and details about building your own version of lalsuite, glue and pylal.
 
+===========================================================
+Additional Dependencies for HDF post processing and Plots
+===========================================================
+In order to run the HDF post processing and plotting codes
+that are in active development and have not yet been reviewed, the following
+additional dependencies are needed. Eventually these will become
+mandatory dependencies. 
+
+* numpy>=1.6.4
+* matplotlib>=1.3.1
+* `mpld3>=0.3.0 <https://github.com/jakevdp/mpld3/tarball/master>`_
+* `PIL <https://pypi.python.org/pypi/PIL>`_
+
 ===================
 Installing from git
 ===================
 
-The source for PyCBC is under ``git`` version control, hosted by the University of Wisconsin-Milwaukee.
+The source for PyCBC is under ``git`` version control, hosted on `github <https://github.com/ligo-cbc/pycbc>`_
 
 You can install the package by first cloning the repository, either read-only:
 
 .. code-block:: bash
 
-    git clone git://ligo-vcs.phys.uwm.edu/pycbc.git
+    git clone https://github.com/ligo-cbc/pycbc.git
 
-or with a LIGO.ORG albert.einstein-style credential:
-
-.. code-block:: bash
-
-    git clone albert.einstein@ligo-vcs.phys.uwm.edu:/usr/local/git/pycbc.git
 
 You can specify the install path directory, using the ``--prefix`` option as follows.
 

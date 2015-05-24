@@ -1,12 +1,13 @@
 """ This module contains utilities to manipulate trigger lists based on 
 segment.
 """
-import numpy, urlparse
+import numpy, urlparse, os.path
+from sys import argv
 from glue.ligolw import ligolw, table, lsctables, utils as ligolw_utils
 from glue import segments
 from glue.segments import segment, segmentlist
-from glue.segmentdb import segmentdb_utils as segutil
-from pycbc.workflow.core import File
+from glue.ligolw.lsctables import LIGOTimeGPS
+from glue.ligolw.utils import segments as ligolw_segments
 
 def start_end_to_segments(start, end):
     return segmentlist([segment(s, e) for s, e in zip(start, end)])
@@ -32,16 +33,32 @@ def segments_to_file(segs, filename, name, ifo=""):
     -------
     File : Return a pycbc.core.File reference to the file
     """
+    from pycbc.workflow.core import File
+
+    # create XML doc and add process table
     outdoc = ligolw.Document()
     outdoc.appendChild(ligolw.LIGO_LW())
+    process = ligolw_utils.process.register_to_xmldoc(outdoc, argv[0], {})
 
-    proc_id = process.register_to_xmldoc(outdoc, "").process_id 
-    def_id = segmentdb_utils.add_to_segment_definer(outdoc, proc_id, ifo, name, 0)
-    segmentdb_utils.add_to_segment(outdoc, proc_id, def_id, segs)
+    # cast segment values into LIGOTimeGPS for glue library utils
+    if type(segs[0][0]) != LIGOTimeGPS:
+        fsegs = [( LIGOTimeGPS(segs[i][0]), LIGOTimeGPS(segs[i][1]) ) for i in range(len(segs))]
+    else:
+        fsegs = segs
+
+    # add segments, segments summary, and segment definer tables using glue library
+    with ligolw_segments.LigolwSegments(outdoc, process) as xmlsegs:
+        xmlsegs.insert_from_segmentlistdict({ifo : fsegs}, name)
+
+    # write file
     ligolw_utils.write_filename(outdoc, filename)
-    
+
+    # return a File instance
     url = urlparse.urlunparse(['file', 'localhost', filename, None, None, None])
-    return File(ifo, name, segs, file_url=url, tags=[name])
+    f = File(ifo, name, segs, file_url=url, tags=[name])
+    f.PFN(os.path.abspath(filename), site='local')
+    return f
+    
 
 def start_end_from_segments(segment_file):
     """ Return the start and end time arrays from a segment file.
@@ -91,7 +108,7 @@ def indices_within_times(times, start, end):
     times_sorted = times[tsort]
     left = numpy.searchsorted(times_sorted, start)
     right = numpy.searchsorted(times_sorted, end)
-    return numpy.hstack(numpy.r_[s:e] for s, e in zip(left, right))
+    return tsort[numpy.hstack(numpy.r_[s:e] for s, e in zip(left, right))]
 
 def indices_within_segments(times, ifo, segment_files):
     """ Return the list of indices that should be vetoed by the segments in the

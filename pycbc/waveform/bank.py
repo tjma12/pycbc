@@ -40,7 +40,10 @@ def sigma_cached(self, psd):
         # If possible, we precalculate the sigmasq vector for all possible waveforms
         if pycbc.waveform.waveform_norm_exists(self.approximant):
             if not hasattr(psd, 'sigmasq_vec'):
-                psd.sigmasq_vec = pycbc.waveform.get_waveform_filter_norm(
+                psd.sigmasq_vec = {}
+            
+            if self.approximant not in psd.sigmasq_vec:
+                psd.sigmasq_vec[self.approximant] = pycbc.waveform.get_waveform_filter_norm(
                      self.approximant, psd, len(psd), psd.delta_f, self.f_lower)
                 
             # Get an amplitude normalization (mass dependant constant norm)
@@ -48,7 +51,7 @@ def sigma_cached(self, psd):
                                  self.params, approximant=self.approximant)
             amp_norm = 1 if amp_norm is None else amp_norm
             scale = DYN_RANGE_FAC * amp_norm
-            self._sigmasq[key] = psd.sigmasq_vec[self.end_idx] * (scale) **2
+            self._sigmasq[key] = psd.sigmasq_vec[self.approximant][self.end_idx] * (scale) **2
 
         else:
             self._sigmasq[key] = sigmasq(self, psd, low_frequency_cutoff=self.f_lower)                    
@@ -60,8 +63,8 @@ class LIGOLWContentHandler(ligolw.LIGOLWContentHandler):
 lsctables.use_in(LIGOLWContentHandler)
 
 class FilterBank(object):
-    def __init__(self, filename, approximant, filter_length, delta_f, f_lower,
-                 dtype, out=None, **kwds):
+    def __init__(self, filename, filter_length, delta_f, f_lower,
+                 dtype, out=None, approximant=None, **kwds):
         self.out = out
         self.dtype = dtype
         self.f_lower = f_lower
@@ -79,6 +82,14 @@ class FilterBank(object):
             self.indoc, lsctables.SnglInspiralTable.tableName)
         self.extra_args = kwds  
 
+    @staticmethod
+    def parse_option(row, arg):
+        import math
+        safe_dict = {}
+        safe_dict.update(row.__dict__)
+        safe_dict.update(math.__dict__)
+        return eval(arg, {"__builtins__":None}, safe_dict)
+
     def __len__(self):
         return len(self.table)
 
@@ -89,9 +100,18 @@ class FilterBank(object):
         else:
             tempout = self.out
 
+        if self.approximant is not None:
+            if 'params' in self.approximant:
+                t = type('t', (object,), {'params' : self.table[index]})
+                approximant = str(self.parse_option(t, self.approximant)) 
+            else:
+                approximant = self.approximant
+        else:
+            raise ValueError("Reading approximant from template bank not yet supported")
+
         # Get the end of the waveform if applicable (only for SPAtmplt atm)
         f_end = pycbc.waveform.get_waveform_end_frequency(self.table[index],
-                              approximant=self.approximant, **self.extra_args)
+                              approximant=approximant, **self.extra_args)
 
         if f_end is None or f_end >= (self.filter_length * self.delta_f):
             f_end = (self.filter_length-1) * self.delta_f
@@ -104,38 +124,33 @@ class FilterBank(object):
         distance = 1.0 / DYN_RANGE_FAC
         htilde = pycbc.waveform.get_waveform_filter(
             tempout[0:self.filter_length], self.table[index],
-            approximant=self.approximant, f_lower=self.f_lower, f_final=f_end,
+            approximant=approximant, f_lower=self.f_lower, f_final=f_end,
             delta_f=self.delta_f, delta_t=self.delta_t, distance=distance,
             **self.extra_args)
 
-        # For time domain templates, record the total duration (which may
+        # If available, record the total duration (which may
         # include ringdown) and the duration up to merger since they will be 
-        # erased by the type conversion below
-        length_in_time = None
-        chirp_length = None
+        # erased by the type conversion below.
+        # NOTE: If these durations are not available the values in self.table
+        #       will continue to take the values in the input file.
         if hasattr(htilde, 'length_in_time'):
-            length_in_time = htilde.length_in_time
+            if htilde.length_in_time is not None:
+                self.table[index].ttotal = htilde.length_in_time
         if hasattr(htilde, 'chirp_length'):
-            chirp_length = htilde.chirp_length
+            if htilde.chirp_length is not None:
+                self.table[index].template_duration = htilde.chirp_length
 
         htilde = htilde.astype(self.dtype)
         htilde.f_lower = self.f_lower
         htilde.end_frequency = f_end
         htilde.end_idx = int(htilde.end_frequency / htilde.delta_f)
         htilde.params = self.table[index]
-        htilde.approximant = self.approximant
+        htilde.approximant = approximant
+        htilde.chirp_length = htilde.params.template_duration
+        htilde.length_in_time = htilde.params.ttotal
         
         # Add sigmasq as a method of this instance
         htilde.sigmasq = types.MethodType(sigma_cached, htilde)
         htilde._sigmasq = {}
 
-        # For time domain templates, assign 'ttotal' to the total template
-        # duration (which may include ringdown) and 'template_duration' to
-        # the duration up to merger as in previous IMR searches
-        if length_in_time is not None:
-            htilde.length_in_time = length_in_time
-            self.table[index].ttotal = length_in_time
-        if chirp_length is not None:
-            htilde.chirp_length = chirp_length
-            self.table[index].template_duration = chirp_length
         return htilde

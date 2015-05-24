@@ -16,16 +16,17 @@
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
-import logging
-import argparse
+import logging, argparse, numpy, itertools
 from pycbc import vetoes, psd, waveform, events, strain, scheme, fft, DYN_RANGE_FAC
 from pycbc.filter import MatchedFilterControl, make_frequency_series
 from pycbc.types import TimeSeries, FrequencySeries, zeros, float32, complex64
-import pycbc.fft.fftw
+import pycbc.fft.fftw, pycbc.version
 
 parser = argparse.ArgumentParser(usage='',
     description="Find single detector gravitational-wave triggers.")
 
+parser.add_argument('--version', action='version', 
+                    version=pycbc.version.git_verbose_msg)
 parser.add_argument("-V", "--verbose", action="store_true", 
                   help="print extra debugging information", default=False )
 parser.add_argument("--output", type=str, help="FIXME: ADD")
@@ -38,21 +39,28 @@ parser.add_argument("--low-frequency-cutoff", type=float,
                   help="The low frequency cutoff to use for filtering (Hz)")
 
 parser.add_argument("--approximant", type=str,
-                  help="The name of the approximant to use for filtering")
+                  help="The name of the approximant to use for filtering. "
+                       "One may choose a single approximant by simple assignment. "
+                       "Choose multiple approximants to use in different mass "
+                       "regions by using math functions and the params keys as "
+                       " follows : \"'SPAtmplt' if (params.mass1 + params.mass2) < 10 "
+                       "  else 'SEOBNRv2_ROM_DoubleSpin'\". Approximant names should "
+                       "be single quoted with the entire expression in double quotes." )
 parser.add_argument("--order", type=str,
                   help="The integer half-PN order at which to generate"
                        " the approximant.")
 taper_choices = ["start","end","startend"]
 parser.add_argument("--taper-template", choices=taper_choices,
-                  help="For time-domain approximants, taper the start and/or "
-                       "end of the waveform before FFTing.")
+                    help="For time-domain approximants, taper the start and/or"
+                    " end of the waveform before FFTing.")
 parser.add_argument("--cluster-method", choices=["template", "window"],
                     help="FIXME: ADD")
 parser.add_argument("--cluster-window", type=float, default = -1,
-                  help="Length of clustering window in seconds")
+                    help="Length of clustering window in seconds")
 parser.add_argument("--maximization-interval", type=float, default=0,
-                  help="Maximize triggers over the template bank (ms)")
+                    help="Maximize triggers over the template bank (ms)")
 parser.add_argument("--bank-veto-bank-file", type=str, help="FIXME: ADD")
+parser.add_argument("--chisq-snr-threshold", type=float, help="Minimum SNR to calculate the power chisq")
 parser.add_argument("--chisq-bins", default=0, help=
                     "Number of frequency bins to use for power chisq. Specify"
                     " an integer for a constant number of bins, or a function "
@@ -63,9 +71,46 @@ parser.add_argument("--chisq-bins", default=0, help=
 parser.add_argument("--chisq-threshold", type=float, default=0,
                     help="FIXME: ADD")
 parser.add_argument("--chisq-delta", type=float, default=0, help="FIXME: ADD")
-parser.add_argument("--autochi-number-points", type=int, default=0)
-parser.add_argument("--autochi-stride", type=int, default=0)
-parser.add_argument("--autochi-onesided", action='store_true', default=False)
+parser.add_argument("--autochi-number-points", type=int, default=0,
+                    help="The number of points to use, in both directions if"
+                         "doing a two-sided auto-chisq, to calculate the"
+                         "auto-chisq statistic.")
+parser.add_argument("--autochi-stride", type=int, default=0,
+                    help="The gap, in sample points, between the points at"
+                         "which to calculate auto-chisq.")
+parser.add_argument("--autochi-two-phase", action="store_true",
+                    default=False,
+                    help="If given auto-chisq will be calculated by testing "
+                         "against both phases of the SNR time-series. "
+                         "If not given, only the phase matching the trigger "
+                         "will be used.")
+parser.add_argument("--autochi-onesided", action='store', default=None,
+                    choices=['left','right'],
+                    help="Decide whether to calculate auto-chisq using"
+                         "points on both sides of the trigger or only on one"
+                         "side. If not given points on both sides will be"
+                         "used. If given, with either 'left' or 'right',"
+                         "only points on that side (right = forward in time,"
+                         "left = back in time) will be used.")
+parser.add_argument("--autochi-reverse-template", action="store_true",
+                    default=False,
+                    help="If given, time-reverse the template before"
+                         "calculating the auto-chisq statistic. This will"
+                         "come at additional computational cost as the SNR"
+                         "time-series will need recomputing for the time-"
+                         "reversed template.")
+parser.add_argument("--autochi-max-valued", action="store_true",
+                    default=False,
+                    help="If given, store only the maximum value of the auto-"
+                         "chisq over all points tested. A disadvantage of this "
+                         "is that the mean value will not be known "
+                         "analytically.")
+parser.add_argument("--autochi-max-valued-dof", action="store", metavar="INT",
+                    type=int,
+                    help="If using --autochi-max-valued this value denotes "
+                         "the pre-calculated mean value that will be stored "
+                         "as the auto-chisq degrees-of-freedom value.")
+
 parser.add_argument("--downsample-factor", type=int, 
                     help="Factor that determines the interval between the "
                          "initial SNR sampling. If not set (or 1) no sparse sample "
@@ -79,6 +124,7 @@ parser.add_argument("--user-tag", type=str, metavar="TAG", help="""
                     This is used to identify FULL_DATA jobs for 
                     compatibility with pipedown post-processing. 
                     Option will be removed when no longer needed.""")
+parser.add_argument("--psd-recalculate-segments", type=int, help="Number of segments to use before recalculating the PSD", default=0)
 
 # Add options groups
 psd.insert_psd_option_group(parser)
@@ -96,6 +142,30 @@ strain.StrainSegments.verify_segment_options(opt, parser)
 scheme.verify_processing_options(opt, parser)
 fft.verify_fft_options(opt,parser)
 
+
+def associate_psd(strain_segments, gwstrain, segments, nsegs, flen, delta_f, flow):
+    logging.info("Computing noise PSD")
+    def grouper(n, iterable):
+        args = [iter(iterable)] * n
+        return list([e for e in t if e != None] for t in itertools.izip_longest(*args))
+        
+    nsegs = nsegs if nsegs != 0 else len(strain_segments.full_segment_slices)    
+    groups = grouper(nsegs, strain_segments.full_segment_slices)   
+    if len(groups[-1]) != len(groups[0]):
+        logging.warn('PSD recalculation does not divide equally among analysis'
+                     'segments. Make sure that this is what you want')
+    
+    psds = []                                     
+    for psegs in groups:
+        strain_part = gwstrain[psegs[0].start:psegs[-1].stop]
+        ppsd = psd.from_cli(opt, flen, delta_f, flow, strain_part, DYN_RANGE_FAC) 
+        psds.append(ppsd)   
+        for seg in segments:
+            if seg.seg_slice in psegs:
+                seg.psd = ppsd.astype(float32)
+    return psds
+     
+   
 if opt.verbose:
     log_level = logging.DEBUG
 else:
@@ -116,10 +186,8 @@ with ctx:
 
     logging.info("Making frequency-domain data segments")
     segments = strain_segments.fourier_segments()
-
-    logging.info("Computing noise PSD")
-    psd = psd.from_cli(opt, flen, delta_f, flow, gwstrain, DYN_RANGE_FAC)
-    psd = psd.astype(float32)
+    psds = associate_psd(strain_segments, gwstrain, segments, 
+                  opt.psd_recalculate_segments, flen, delta_f, flow)
 
     matched_filter = MatchedFilterControl(opt.low_frequency_cutoff, None,
                                    opt.snr_threshold, tlen, delta_f, complex64,
@@ -128,17 +196,22 @@ with ctx:
                                    upsample_method=opt.upsample_method)
 
     bank_chisq = vetoes.SingleDetBankVeto(opt.bank_veto_bank_file,
-                                          opt.approximant, flen, delta_f, flow,
-                                          complex64, phase_order=opt.order)
+                                          flen, delta_f, flow, complex64, 
+                                          phase_order=opt.order, 
+                                          approximant=opt.approximant)
 
-    power_chisq = vetoes.SingleDetPowerChisq(opt.chisq_bins)
+    power_chisq = vetoes.SingleDetPowerChisq(opt.chisq_bins, opt.chisq_snr_threshold)
     autochisq = vetoes.SingleDetAutoChisq(opt.autochi_stride,
-                                          opt.autochi_number_points, 
-                                          onesided=opt.autochi_onesided)
+                                 opt.autochi_number_points, 
+                                 onesided=opt.autochi_onesided,
+                                 twophase=opt.autochi_two_phase,
+                                 reverse_template=opt.autochi_reverse_template,
+                                 take_maximum_value=opt.autochi_max_valued,
+                                 maximal_value_dof=opt.autochi_max_valued_dof)
 
     logging.info("Overwhitening frequency-domain data segments")
     for seg in segments:
-        seg /= psd
+        seg /= seg.psd
 
     # storage for values and types to be passed to event manager
     out_types = {
@@ -160,47 +233,45 @@ with ctx:
     names = sorted(out_vals.keys())
 
     event_mgr = events.EventManager(opt, names,
-                                        [out_types[n] for n in names], psd=psd)
+                                        [out_types[n] for n in names], psd=psds[0])
 
     logging.info("Read in template bank")
-    bank = waveform.FilterBank(opt.bank_file, opt.approximant, flen, delta_f,
+    bank = waveform.FilterBank(opt.bank_file, flen, delta_f,
                     flow, dtype=complex64, phase_order=opt.order,
-                    taper=opt.taper_template, out=zeros(tlen, dtype=complex64))
+                    taper=opt.taper_template, approximant=opt.approximant,
+                    out=zeros(tlen, dtype=complex64))
 
     for t_num, template in enumerate(bank):
-        event_mgr.new_template(tmplt=template.params, sigmasq=template.sigmasq(psd))
+        event_mgr.new_template(tmplt=template.params, sigmasq=template.sigmasq(psds[0]))
         if opt.cluster_method == "window":
             cluster_window = int(opt.cluster_window * gwstrain.sample_rate)
         elif opt.cluster_method == "template":
             cluster_window = int(template.chirp_length * gwstrain.sample_rate)
 
         for s_num, stilde in enumerate(segments):
-            logging.info("Filtering template %d/%d segment %d/%d" % \
+            logging.info("Filtering template %d/%d segment %d/%d" % 
                          (t_num + 1, len(bank), s_num + 1, len(segments)))
 
             snr, norm, corr, idx, snrv = \
                matched_filter.matched_filter_and_cluster(template, 
-                                  template.sigmasq(psd), stilde, cluster_window)
+                                  template.sigmasq(stilde.psd), stilde, cluster_window)
 
             if not len(idx):
                 continue
 
-            out_vals['bank_chisq'] = bank_chisq.values(template, psd, stilde, snrv,
+            out_vals['bank_chisq'] = bank_chisq.values(template, stilde.psd, stilde, snrv,
                                                 norm, idx+stilde.analyze.start)
-
             out_vals['chisq'], out_vals['chisq_dof'] = power_chisq.values(corr,
-                       snr, snrv, norm, psd, idx+stilde.analyze.start, template)
+                       snr, snrv, norm, stilde.psd, idx+stilde.analyze.start, template)
 
-            snrv *= norm
-
-            out_vals['cont_chisq'] = autochisq.values(snr, corr,
-                                       idx+stilde.analyze.start, template, psd,
-                                       norm, low_frequency_cutoff=flow)
-
+            out_vals['cont_chisq'] = autochisq.values(snr,
+                  idx+stilde.analyze.start, template, stilde.psd, norm, stilde=stilde,
+                  low_frequency_cutoff=flow)
+            
             idx += stilde.cumulative_index
 
             out_vals['time_index'] = idx
-            out_vals['snr'] = snrv
+            out_vals['snr'] = snrv * norm
 
             event_mgr.add_template_events(names, [out_vals[n] for n in names])
 

@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 """ Make interactive visualization of segments
 """
-import matplotlib, numpy, pylab, pycbc.events, argparse, mpld3, mpld3.plugins
+import matplotlib
+matplotlib.use('Agg')
+import numpy, pylab, pycbc.events, argparse, mpld3, mpld3.plugins
 import itertools, datetime, time
 from matplotlib.patches import Rectangle
 from pycbc.results.mpld3_utils import MPLSlide, Tooltip
@@ -87,9 +89,9 @@ for i, seg_file in enumerate(args.segment_files):
     h = .7
     name = get_name(seg_file)
     start, end = pycbc.events.start_end_from_segments(seg_file)
-
+    
     dur = end - start
-    total = timestr(dur.sum())
+    total = timestr(abs(pycbc.events.start_end_to_segments(start, end).coalesce()))
     
     label = """<table>
              <tr><th>Start</th><td>%.0f</td></tr>
