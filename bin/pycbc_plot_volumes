@@ -213,8 +213,8 @@ if opts.use_global_norm:
     # otherwise, the norm is the sum of the weights of all of the injections
     else:
         weights = numpy.array([distributions.convert_distribution(
-            x, x.inj_mass_distr, astprior) for x in results
-            if x.inj_weight is not None])
+            x, x.injection.mass_distr, astprior) for x in results
+            if x.injection.vol_weight is not None])
         norm = weights.sum() 
     # now set the global norm for all the phyper cubes
     for pcube in efficiency.get_all_cubes_in_layers(layers[0]):

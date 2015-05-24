@@ -301,15 +301,15 @@ class PHyperCube:
         if self.nsamples <= 1:
             raise ValueError("there must be more than one sample to " +
                 "compute efficiency")
-        integrand = numpy.array([x.inj_min_vol + x.inj_weight * \
+        integrand = numpy.array([x.injection.min_vol + x.injection.vol_weight*\
             float(_isfound(x, ranking_stat, compare_operator, threshold)) \
-            for x in self.data if x.inj_weight is not None])
+            for x in self.data if x.injection.vol_weight is not None])
         if astro_prior is not None:
             # apply the appropriate astrophysical prior
             # FIXME: this currently only works on masses
             weights = numpy.array([distributions.convert_distribution(
-                x, x.inj_mass_distr, astro_prior) for x in self.data
-                if x.inj_weight is not None])
+                x, x.injection.mass_distr, astro_prior) for x in self.data
+                if x.injection.vol_weight is not None])
         else:
             weights = numpy.ones(self.nsamples, dtype=float)
         # apply the appropriate norm to the weights
@@ -371,7 +371,7 @@ class PHyperCube:
                 "options are 'max' or 'min'")
         distances = numpy.array([x.distance for x in self.data])
 
-        weights = numpy.array([x.inj_weight for x in self.data])
+        weights = numpy.array([x.injection.vol_weight for x in self.data])
         integrand = numpy.array([\
             float(_isfound(x, ranking_stat, compare_operator, threshold)) \
             for x in self.data])

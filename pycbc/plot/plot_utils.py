@@ -297,6 +297,15 @@ class Injection(Template):
     __slots__ = [_id_name] + Template._intrinsic_params + \
         Template._extrinsic_params + Template._waveform_params + \
         _ifo_params + _inj_params
+    def __init__(self, **kwargs):
+        # ensure sngl_ifos is a dictionary
+        self.sngl_ifos = kwargs.pop('sngl_ifos', {})
+        # set the default for the rest to None
+        [setattr(self, param, kwargs.pop(param, None)) for param in \
+            self.__slots__ if param != 'sngl_ifos']
+        # if anything left, raise an error, as it is an unrecognized argument
+        if kwargs != {}:
+            raise ValueError("unrecognized arguments: %s" %(kwargs.keys()))
 
 
 class Result(object):
@@ -506,7 +515,7 @@ def get_injection_results(filenames, load_inj_distribution=False,
             sim.process_id, sim.waveform, sim.simulation_id,
             sim.mass1, sim.mass2, sim.spin1x, sim.spin1y, sim.spin1z,
             sim.spin2x, sim.spin2y, sim.spin2z,
-            sim.distance, sim.inclination, sim.alpha0, sim.alpha1,
+            sim.distance, sim.inclination, sim.alpha1, sim.alpha2,
             tmplt.event_id, tmplt.mass1, tmplt.mass2,
             tmplt.spin1x, tmplt.spin1y, tmplt.spin1z,
             tmplt.spin2x, tmplt.spin2y, tmplt.spin2z,
@@ -556,11 +565,13 @@ def get_injection_results(filenames, load_inj_distribution=False,
             continue
         connection = sqlite3.connect(thisfile)
         cursor = connection.cursor()
-        try:
+        #try:
+        if True:
             for (sim_proc_id, apprx, sim_id, m1, m2, s1x, s1y, s1z,
                     s2x, s2y, s2z, dist, inc, min_vol, inj_weight,
-                    tmplt_evid, tmplt_m1, tmplt_m2, tmplt_s1z,
-                    tmplt_s2z, ff, snr,
+                    tmplt_evid, tmplt_m1, tmplt_m2,
+                    tmplt_s1x, tmplt_s1y, tmplt_s1z,
+                    tmplt_s2x, tmplt_s2y, tmplt_s2z, ff, snr,
                     snr_std, weight, chisq, chisq_std, chisq_dof, new_snr,
                     new_snr_std, nsamp, sample_rate, ceid) in \
                     cursor.execute(sqlquery, get_args):
@@ -597,7 +608,7 @@ def get_injection_results(filenames, load_inj_distribution=False,
                     thisRes.injection.spin2z = s2z
                 thisRes.injection.distance = dist
                 thisRes.injection.inclination = inc
-                thisRes.injection.injection.min_vol = min_vol
+                thisRes.injection.min_vol = min_vol
                 thisRes.injection.vol_weight = inj_weight
                 thisRes.injection.sample_rate = sample_rate
                 # set the template parameters
@@ -671,17 +682,18 @@ def get_injection_results(filenames, load_inj_distribution=False,
                         continue
                     sngl_params = SnglIFOInjectionParams(ifo=ifo,
                         sigma=numpy.sqrt(sigmasq))
-                    thisRes.injection.ifos[ifo] = sngl_params
+                    thisRes.injection.sngl_ifos[ifo] = sngl_params
                     if min_vol is not None:
                         thisRes.injection.min_vol = min_vol
                     if inj_weight is not None:
                         thisRes.injection.vol_weight = vol_weight
 
-        except sqlite3.OperationalError:
+        #except sqlite3.OperationalError:
+        else:
             cursor.close()
             connection.close()
             continue
-        except sqlite3.DatabaseError:
+        #except sqlite3.DatabaseError:
             cursor.close()
             connection.close()
             print "Database Error: %s" % thisfile
