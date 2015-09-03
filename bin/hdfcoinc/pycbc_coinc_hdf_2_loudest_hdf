@@ -58,9 +58,11 @@ elif coinc_trig_file.attrs['detector_1'] == 'L1':
     L1_idx = np.array(coinc_trig_file['foreground']['trigger_id1'][:])[[N_loudest]]
     H1_idx = np.array(coinc_trig_file['foreground']['trigger_id2'][:])[[N_loudest]]
 
-# extract coinc information for loudest N events from HDF files
-# cast all information numpy arrays and select indeces corresponding to loud events
-# further cast these selected arrays into python dictionaries that can be
+# Extract coincident trigger information for loudest N events from HDF files
+#
+# Cast all information into numpy arrays and select indeces corresponding to loud events
+#
+# Further cast these selected arrays into python dictionaries that can be
 # very easily converted into an HDF structure
 data = {'coinc/stat':coinc_newsnr[[N_loudest]]}
 data['coinc/ifar'] = np.array(coinc_trig_file['foreground']['ifar'][:])[[N_loudest]]
