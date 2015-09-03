@@ -1,0 +1,115 @@
+#!/usr/bin/env python
+
+# This script reads in coincident HDF triggers files and single IFO trigger files,
+# parses them to search for the loudest coincident events, and builds a new HDF 
+# file containing all relevant information about these triggers to be used for 
+# follow-up of individual events.
+#
+# TJ Massinger
+
+
+
+import logging
+import h5py
+import numpy as np
+import argparse
+from pycbc.pnutils import mass1_mass2_to_mchirp_eta
+from pycbc.waveform.spa_tmplt import findchirp_chirptime
+from pycbc.events import newsnr
+
+logging.basicConfig(format='%(asctime)s %(message)s', level=logging.INFO)
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--coinc-trig-file', type=str, required=True,
+        help='HDF file containing coincident CBC triggers')
+parser.add_argument('--L1-trigs', type=str, required=True,
+        help='HDF file containing L1 CBC triggers')
+parser.add_argument('--H1-trigs', type=str, required=True,
+        help='HDF file containing H1 CBC triggers')
+parser.add_argument('--template-file', type=str, required=True,
+        help='HDF file containing template information for CBC search')
+parser.add_argument('--output-file', type=str, required=True,
+        help='Full path to output file')
+parser.add_argument('--N', type=int, required=True, default=1,
+        help='Generate HDF file with info about the N loudest coincident trigger')
+parser.add_argument('--f-lower', type=float, required=True, default=30,
+        help='Lower frequency cutoff for matched filter search')
+args = parser.parse_args()
+
+logging.info('Reading HDF files')
+
+coinc_trig_file = h5py.File(args.coinc_trig_file,'r')
+L1_trig_file = h5py.File(args.L1_trigs,'r')
+H1_trig_file = h5py.File(args.H1_trigs,'r')
+template_file = h5py.File(args.template_file,'r')
+outfile = h5py.File(args.output_file,'w')
+
+logging.info('Parsing HDF files and casting to dictionaries')
+
+# read newSNR of coinc triggers and find indeces of the N loudest events
+coinc_newsnr = coinc_trig_file['foreground']['stat'][:]
+N_loudest = np.argsort(coinc_newsnr)[-args.N:]
+
+# find indeces of single IFO trigs that correspond to loudest coinc trigs
+if coinc_trig_file.attrs['detector_1'] == 'H1':
+    H1_idx = np.array(coinc_trig_file['foreground']['trigger_id1'][:])[[N_loudest]]
+    L1_idx = np.array(coinc_trig_file['foreground']['trigger_id2'][:])[[N_loudest]]
+elif coinc_trig_file.attrs['detector_1'] == 'L1':
+    L1_idx = np.array(coinc_trig_file['foreground']['trigger_id1'][:])[[N_loudest]]
+    H1_idx = np.array(coinc_trig_file['foreground']['trigger_id2'][:])[[N_loudest]]
+
+# extract coinc information for loudest N events from HDF files
+# cast all information numpy arrays and select indeces corresponding to loud events
+# further cast these selected arrays into python dictionaries that can be
+# very easily converted into an HDF structure
+data = {'coinc/stat':coinc_newsnr[[N_loudest]]}
+data['coinc/ifar'] = np.array(coinc_trig_file['foreground']['ifar'][:])[[N_loudest]]
+time1 = np.array(coinc_trig_file['foreground']['time1'][:])[[N_loudest]]
+time2 = np.array(coinc_trig_file['foreground']['time2'][:])[[N_loudest]]
+data['coinc/abs_time_delay'] = abs(time1 - time2)
+
+# extract single IFO information for loudest N events
+data['H1/snr'] = np.array(H1_trig_file['H1']['snr'][:])[[H1_idx]]
+data['H1/chisq'] = np.array(H1_trig_file['H1']['chisq'][:])[[H1_idx]]
+data['H1/chisq_dof'] = np.array(H1_trig_file['H1']['chisq_dof'][:])[[H1_idx]]
+data['H1/reduced_chisq'] = data['H1/chisq']/(2*data['H1/chisq_dof'] - 2)
+data['H1/newsnr'] = newsnr(data['H1/snr'],data['H1/reduced_chisq'])
+data['H1/end_time'] = np.array(H1_trig_file['H1']['end_time'][:])[[H1_idx]]
+data['H1/template_id'] = np.array(H1_trig_file['H1']['template_id'][:])[[H1_idx]]
+
+data['L1/snr'] = np.array(L1_trig_file['L1']['snr'][:])[[L1_idx]]
+data['L1/chisq'] = np.array(L1_trig_file['L1']['chisq'][:])[[L1_idx]]
+data['L1/chisq_dof'] = np.array(L1_trig_file['L1']['chisq_dof'][:])[[L1_idx]]
+data['L1/reduced_chisq'] = data['L1/chisq']/(2*data['L1/chisq_dof'] - 2)
+data['L1/newsnr'] = newsnr(data['L1/snr'],data['L1/reduced_chisq'])
+data['L1/end_time'] = np.array(L1_trig_file['L1']['end_time'][:])[[L1_idx]]
+data['L1/template_id'] = np.array(L1_trig_file['L1']['template_id'][:])[[L1_idx]]
+
+if not np.array_equal(data['L1/template_id'],data['H1/template_id']):
+    logging.info('Templates did not match between detectors!')
+
+# extract template information for loudest events
+mass1 = np.array(template_file['mass1'][:])[[data['H1/template_id']]]
+mass2 = np.array(template_file['mass2'][:])[[data['H1/template_id']]]
+
+
+#calculate chirp time, eta, and mchirp given m1, m2, f_lower, and PN order = 3.5
+mchirp, eta = mass1_mass2_to_mchirp_eta(mass1, mass2)
+chirp_times= np.array([findchirp_chirptime(m1,m2,args.f_lower,7) for (m1, m2) in zip(mass1, mass2)])
+total_mass = mass1 + mass2
+mass_ratio = mass1/mass2
+
+# cast all inspiral information into python dictionary
+data['template/mass1'] = mass1
+data['template/mass2'] = mass2
+data['template/mchirp'] = mchirp
+data['template/eta'] = eta
+data['template/chirp_time'] = chirp_times
+data['template/total_mass'] = total_mass
+data['template/mass_ratio'] = mass_ratio
+
+for key in data.keys():
+    dset = outfile.create_dataset(key,data=data[key],compression='gzip')
+
+
+
