@@ -48,7 +48,7 @@ logging.info('Parsing HDF files and casting to dictionaries')
 
 # read newSNR of coinc triggers and find indeces of the N loudest events
 coinc_newsnr = coinc_trig_file['foreground']['stat'][:]
-N_loudest = np.argsort(coinc_newsnr)[-args.N:]
+N_loudest = np.argsort(coinc_newsnr)[::-1][:args.N]
 
 # find indeces of single IFO trigs that correspond to loudest coinc trigs
 if coinc_trig_file.attrs['detector_1'] == 'H1':
@@ -78,6 +78,7 @@ data['H1/reduced_chisq'] = data['H1/chisq']/(2*data['H1/chisq_dof'] - 2)
 data['H1/newsnr'] = newsnr(data['H1/snr'],data['H1/reduced_chisq'])
 data['H1/end_time'] = np.array(H1_trig_file['H1']['end_time'][:])[[H1_idx]]
 data['H1/template_id'] = np.array(H1_trig_file['H1']['template_id'][:])[[H1_idx]]
+data['H1/template_duration'] = np.array(H1_trig_file['H1']['template_duration]'[:])[[H1_idx]]
 
 data['L1/snr'] = np.array(L1_trig_file['L1']['snr'][:])[[L1_idx]]
 data['L1/chisq'] = np.array(L1_trig_file['L1']['chisq'][:])[[L1_idx]]
@@ -86,6 +87,7 @@ data['L1/reduced_chisq'] = data['L1/chisq']/(2*data['L1/chisq_dof'] - 2)
 data['L1/newsnr'] = newsnr(data['L1/snr'],data['L1/reduced_chisq'])
 data['L1/end_time'] = np.array(L1_trig_file['L1']['end_time'][:])[[L1_idx]]
 data['L1/template_id'] = np.array(L1_trig_file['L1']['template_id'][:])[[L1_idx]]
+data['L1/template_duration'] = np.array(L1_trig_file['L1']['template_duration]'[:])[[L1_idx]]
 
 if not np.array_equal(data['L1/template_id'],data['H1/template_id']):
     logging.info('Templates did not match between detectors!')
@@ -95,9 +97,8 @@ mass1 = np.array(template_file['mass1'][:])[[data['H1/template_id']]]
 mass2 = np.array(template_file['mass2'][:])[[data['H1/template_id']]]
 
 
-#calculate chirp time, eta, and mchirp given m1, m2, f_lower, and PN order = 3.5
+#calculate eta and mchirp given m1, m2
 mchirp, eta = mass1_mass2_to_mchirp_eta(mass1, mass2)
-chirp_times= np.array([findchirp_chirptime(m1,m2,args.f_lower,7) for (m1, m2) in zip(mass1, mass2)])
 total_mass = mass1 + mass2
 mass_ratio = mass1/mass2
 
