@@ -55,6 +55,7 @@ reduced_chisq = chisq/(2*chisq_dof - 2)
 newsnr = pycbc.events.newsnr(snr,reduced_chisq)
 template_ids = trigs[args.ifo]['template_id'][mask]
 end_times = trigs[args.ifo]['end_time'][mask]
+sigmasq = trigs[args.ifo]['sigmasq'][mask]
 
 if args.ranking_statistic == 'snr':
     idx = np.argmax(snr)
@@ -75,12 +76,15 @@ data['%s/chisq' % args.ifo] = [chisq[idx]]
 data['%s/newsnr' % args.ifo] = [newsnr[idx]]
 data['%s/template_id' % args.ifo] = [tid]
 data['%s/end_time' % args.ifo] = [cbc_end_time]
+data['%s/rchisq' % args.ifo] = [reduced_chisq[idx]]
+data['%s/sigmasq' % args.ifo] = [sigmasq[idx]]
 data['template/mass1'] = [m1]
 data['template/mass2'] = [m2]
 data['template/mchirp'] = [mchirp]
 data['template/eta'] = [eta]
 data['template/spin1z'] = [s1z]
 data['template/spin2z'] = [s2z]
+
 
 if args.output_file:
     for key in data.keys():
